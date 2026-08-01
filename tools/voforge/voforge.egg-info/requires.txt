@@ -1,0 +1,7 @@
+edge-tts>=6.1
+
+[clone]
+coqui-tts>=0.27
+
+[media]
+imageio-ffmpeg>=0.4

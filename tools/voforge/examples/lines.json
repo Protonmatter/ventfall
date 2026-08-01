@@ -1,6 +1,8 @@
 [
-  {"who": "narr", "text": "The station had been dark for a hundred years."},
-  {"who": "hero", "text": "Then someone turned the lights back on."},
-  {"who": "mentor", "text": "Careful, kid. Light draws more than moths down here."},
-  {"who": "villain", "text": "You woke something that was content to sleep. That was your first mistake."}
+  {"who": "narr",    "text": "The station had been dark for a hundred years.", "tone": "awe"},
+  {"who": "hero",    "text": "Then someone turned the lights back on."},
+  {"who": "mentor",  "text": "Careful, kid. Light draws more than moths down here.", "tone": "grim"},
+  {"who": "villain", "text": "You woke something that was content to sleep. That was your first mistake.", "style": "angry", "styledegree": "1.4"},
+  {"who": "hero",    "text": "Stay close. Stay quiet.", "tone": "whisper"},
+  {"who": "mentor",  "text": "Run. RUN!", "tone": "urgent", "rate": "+25%"}
 ]

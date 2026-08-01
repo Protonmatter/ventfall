@@ -1,9 +1,22 @@
+Metadata-Version: 2.4
+Name: voforge
+Version: 0.3.0
+Summary: Batch neural voice-over generator with tones, emotional styles, and voice cloning
+License: MIT
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: edge-tts>=6.1
+Provides-Extra: clone
+Requires-Dist: coqui-tts>=0.27; extra == "clone"
+Provides-Extra: media
+Requires-Dist: imageio-ffmpeg>=0.4; extra == "media"
+
 # voforge
 
-Batch neural voice-over generator with **tones, emotional styles, and voice
-cloning**. Feed it a list of dialog lines and a cast sheet; it renders one
-audio file per unique line. Project-agnostic, pip-installable, CI-friendly,
-with drop-in runtime players for web, Unity, and Godot.
+Batch neural voice-over generator with **tones and emotional styles**. Feed it
+a list of dialog lines and a cast sheet; it renders one mp3 per unique line
+using neural TTS voices. Project-agnostic, pip-installable, CI-friendly, with
+drop-in runtime players for web, Unity, and Godot.
 
 Network is needed at **build time only** — the rendered pack ships with your
 project and plays offline. This is the generator behind VENTFALL's
@@ -13,24 +26,6 @@ fully-voiced campaign (139 lines, seven actors).
 pip install ./tools/voforge          # or: pip install git+https://github.com/Protonmatter/ventfall#subdirectory=tools/voforge
 voforge --lines lines.json --cast cast.json --out vo/
 ```
-
-## Choosing a backend for naturalness
-
-Naturalness, intonation, and accuracy are properties of the **model**, not a
-knob — so pick the backend that matches how natural you need it:
-
-| Backend | Naturalness | Emotion path | Cost / setup |
-|---|---|---|---|
-| `edge` (default) | good neutral neural voices | **tones** (prosody deltas — an *approximation* of emotion, not acted) | free, no key |
-| `azure` | good, with acted emotion | **styles** — true `express-as` (angry/sad/whispering...) with natural intonation | Azure Speech key |
-| `xtts` | **very natural, clones a real performance** | inherits the reference recording's own prosody & intonation | free, local, one-time model download |
-| `elevenlabs` | **most natural** | contextual, per-line | paid API key |
-
-Honest guidance: prosody **tones never produce natural acted emotion** — they
-pitch/speed-shift a neutral read. For genuinely natural emotional delivery use
-`azure` (acted styles) or, best of all, **clone a reference performance with
-`xtts`/`elevenlabs`** — the model reproduces the intonation of the sample you
-give it.
 
 ## Expression: tones vs styles
 
@@ -61,71 +56,16 @@ Resolution order: speaker base → tone preset → per-line `rate`/`pitch`/
 `volume` overrides. `voforge --dry-run` shows exactly how every line resolves
 before you spend a single network call.
 
-## Voice cloning from a microphone, audio, or video
-
-Clone any voice you have the right to use — feed the model a short reference
-recording and it reproduces that person's timbre **and their natural
-prosody/intonation**.
-
-**1. Make a reference clip** (6–30 s of one clear speaker, no music):
-
-```bash
-voforge --record-ref mara.wav --duration 20            # from the microphone
-voforge --extract-ref interview.mp4 mara.wav --start 12 --duration 20   # from video
-voforge --extract-ref memo.m4a mara.wav                # from an audio file
-```
-
-(`--extract-ref`/`--record-ref` use ffmpeg — found on PATH or via
-`pip install imageio-ffmpeg`.)
-
-**2. Point a cast entry at it** and declare consent:
-
-```json
-{ "mara": { "ref": "mara.wav", "consent": true } }
-```
-
-**3. Render with a cloning backend:**
-
-```bash
-voforge --lines lines.json --cast cast.json --backend xtts --out vo/
-```
-
-Cloned lines are written as `.wav`; the runtime players take an `ext: "wav"`
-option to match. **Consent gate:** voforge refuses to synthesize from a `ref`
-or `voice_id` unless that cast entry has `"consent": true`. Only clone voices
-you own or have explicit permission to use.
-
-### Setting up the local cloning engine (xtts)
-
-XTTS needs PyTorch, which currently ships wheels only for **Python 3.12**
-(not 3.13/3.14). Provision a dedicated env — verified working, including on
-Windows on Arm / Snapdragon:
-
-```bash
-# 1. a Python 3.12 environment (uv is the easy way on any OS/arch):
-uv venv voforge-clone --python 3.12
-# 2. native torch from the PyTorch CPU index (win-arm64 or win-amd64 wheels;
-#    on Snapdragon the amd64 wheels also run fine under emulation):
-uv pip install torch==2.7.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cpu
-# 3. voforge + the cloning stack (pins in requirements-clone.txt):
-uv pip install ./tools/voforge -r ./tools/voforge/requirements-clone.txt
-```
-
-First render downloads ~1.8 GB of XTTS weights, then runs fully offline.
-
 ## Backends
 
 | Backend | Cost | Expression | Setup |
 |---|---|---|---|
 | `edge` (default) | free, no key | tones (prosody) | `pip install edge-tts` |
-| `azure` | Azure Speech pricing | tones + true styles + beat breaks (`…`/`—` → 350ms pauses) | `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION` |
-| `xtts` | free, local | clones a reference recording (natural prosody) | Python 3.12 + `requirements-clone.txt` |
-| `elevenlabs` | paid API | hosted synthesis / cloning by `voice_id` | `ELEVENLABS_API_KEY` |
+| `azure` | Azure Speech pricing | tones + true styles + beat breaks (`…`/`—` → 350ms pauses) | `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION` env vars |
 
-The azure and elevenlabs backends are implemented to their documented REST
-contracts but haven't been exercised against live subscriptions from this
-repo; treat the first run as a shakedown. The `edge` and `xtts` backends are
-verified end-to-end (xtts on Windows-on-Arm, x86-64-emulated).
+The azure backend is implemented to the documented REST contract but hasn't
+been exercised against a live subscription from this repo; treat the first
+run as a shakedown.
 
 ## Inputs
 
@@ -178,12 +118,10 @@ Matching consumers so projects don't reimplement the hash:
 
 ```
 voforge --lines FILE --cast FILE [--out DIR] [--name hash|id|seq]
-        [--backend edge|azure|xtts|elevenlabs] [--jobs N] [--force] [--dry-run]
+        [--backend edge|azure] [--jobs N] [--force] [--dry-run]
 voforge --list-voices [FILTER]
 voforge --list-tones
 voforge --audition VOICE "TEXT" [--tone TONE] [--out DIR]
-voforge --record-ref OUT.wav [--duration S] [--device NAME]
-voforge --extract-ref MEDIA OUT.wav [--start S] [--duration S]
 ```
 
 Build-ready behavior: inputs are validated up front with every problem

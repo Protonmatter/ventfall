@@ -1,6 +1,9 @@
 {
   "_default": {"voice": "en-GB-ThomasNeural", "rate": "-6%"},
   "_subs": [["⋮", ","], ["[▸·—…]", ", "]],
+  "_tones": {
+    "spooked": {"rate": "+10%", "pitch": "+9Hz", "volume": "-15%"}
+  },
   "hero":    {"voice": "en-US-AriaNeural"},
   "mentor":  {"voice": "en-NG-AbeoNeural", "rate": "-4%"},
   "villain": {"voice": "en-GB-RyanNeural", "rate": "+6%"},

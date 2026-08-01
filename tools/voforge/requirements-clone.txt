@@ -1,0 +1,16 @@
+# voforge local voice-cloning toolchain — pinned to a verified-working set.
+#
+# The xtts backend needs PyTorch + Coqui XTTS, which only ship wheels for
+# Python 3.12 (not 3.13/3.14). Provision a dedicated Python 3.12 env, then:
+#
+#   pip install torch==2.7.0 torchaudio==2.7.0 \
+#       --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements-clone.txt
+#
+# On Windows on Arm (Snapdragon) the x86-64 wheels run under emulation
+# (win-amd64 tag); native win-arm64 torch wheels exist for Python 3.12 via
+# the same CPU index. Both paths are verified.
+#
+# torch/torchaudio are installed separately (above) from the PyTorch index.
+coqui-tts==0.27.5
+transformers>=4.57,<5.0     # coqui-tts 0.27.5 needs >=4.57 but breaks on 5.x

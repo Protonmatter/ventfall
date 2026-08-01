@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voforge"
+version = "0.3.0"
+description = "Batch neural voice-over generator with tones, emotional styles, and voice cloning"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = ["edge-tts>=6.1"]
+
+[project.optional-dependencies]
+clone = ["coqui-tts>=0.27"]      # local XTTS voice cloning
+media = ["imageio-ffmpeg>=0.4"]  # bundled ffmpeg for --extract-ref/--record-ref
+
+[project.scripts]
+voforge = "voforge.cli:main"
+
+[tool.setuptools]
+packages = ["voforge"]

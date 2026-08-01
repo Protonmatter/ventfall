@@ -90,6 +90,27 @@ through `store.read` with fallbacks — private-mode browsers throw on access.
 - `DEFS[x].cost` / `.train` — economy pacing
 - crew cap is `gives: 8` per Habitat, hard cap 120
 
+## Campaign invariants
+
+- **Mission scripting lives in `CHAPTERS`** — objectives, timed/conditional
+  events, scripted spawns, zone definitions, and function-valued briefs. Saves
+  never serialise closures: they persist objective progress and per-event
+  `fired` flags by index and rehydrate from `CHAPTERS` by chapter id.
+- **`protect` objectives are satisfied by not failing.** They never set
+  `done`; the all-done check skips them. Treating them as blocking makes any
+  chapter with one unwinnable.
+- **Objectives don't evaluate while a Scene is open.** A conditional event can
+  open a decision scene the same tick the objectives would complete; deferring
+  the check keeps a debrief from stomping an open choice.
+- **`ownFlags` per chapter** list the decision flags that chapter can set;
+  starting (or replaying) the chapter deletes them so choices can be remade.
+  Unity/dominion points intentionally accumulate across replays.
+- **Three teams.** `friendly(a,b)` treats PLAYER+ALLY as one side; any new
+  targeting, splash, healing, or vision code must use it rather than `!==`.
+- **URL flags**: `?nopause` disables auto-pause-on-hide (capture tools);
+  `?debug` exposes `window.__V` (win/lose/start/spawn/save/load/ending) for
+  automated testing.
+
 ## Known rough edges
 
 - Crew capacity is tight early; a second Habitat is close to mandatory.

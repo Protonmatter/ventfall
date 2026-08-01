@@ -1533,6 +1533,8 @@ function tickMission(dt){
     if(ev.run) ev.run(m);
     if(ev.shots) Scene.play(ev.shots);
   });
+  // a scene opened this tick (possibly holding a decision): objectives wait
+  if(Scene.active) return;
   // evacuation zones swallow friendly units that reach them
   for(const z of m.zones){
     if(!z.evacTag) continue;
@@ -1570,7 +1572,8 @@ function tickMission(dt){
         if(o.prog>=(o.n||1)) o.done=true; break;
     }
     if(o.failed&&!o.optional) return missionLose(o.text);
-    if(!o.done&&!o.optional) allDone=false;
+    // protect objectives are satisfied by not failing; everything else must complete
+    if(!o.done&&!o.optional&&o.type!=="protect") allDone=false;
   }
   if(allDone&&m.objs.length) return missionWin();
   // a commander with nothing left has lost regardless of objectives
@@ -2667,7 +2670,7 @@ function beginMission(ch){
 }
 function startChapter(i,opts){
   opts=opts||{};
-  if(!CS) CS=freshCS();
+  if(!CS) CS=loadCampaign()||freshCS();   // never orphan an existing expedition
   const ch=CHAPTERS[i];
   if(!ch) return showEpilogue();
   CS.chapter=i;
@@ -3802,6 +3805,17 @@ el("againBtn").onclick=()=>{
 };
 boot();
 frame();
+// ?debug exposes a test console for automated verification and modding pokes
+if(/[?&]debug/.test(location.search)){
+  window.__V={
+    G:()=>G, CS:()=>CS, chapters:()=>CHAPTERS,
+    win:()=>missionWin(), lose:w=>missionLose(w),
+    start:(i,s)=>startChapter(i,{skipBrief:s!==false}),
+    spawn:doSpawn, ore:n=>{G.ore[PLAYER]+=n;},
+    save:k=>saveToSlot(k||"slotA"), load:k=>loadFromSlot(k||"slotA"),
+    ser:serializeGame, scene:Scene, end:()=>showEpilogue(), ending:()=>computeEnding()
+  };
+}
 })();
 </script>
 </body>

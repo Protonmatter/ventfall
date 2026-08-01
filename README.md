@@ -1,15 +1,41 @@
-# VENTFALL
+# VENTFALL — Ashes of the Deep
 
 **[▶ Play it now](https://protonmatter.github.io/ventfall/)** — nothing to install.
 
-A real-time strategy game that runs in a browser. One HTML file, no build step, no
-dependencies, no network calls — the fonts are embedded and the page works fully
-offline. All graphics are drawn procedurally to canvas; audio plays from the
-repo's own pre-rendered sound pack when served over HTTP and falls back to live
-Web Audio synthesis of the same cues when opened from disk.
+A real-time strategy game with a full narrative campaign, in one HTML file. No
+build step, no dependencies, no network calls — fonts embedded, fully offline.
+All graphics are drawn procedurally to canvas (2.5D: textured strata, extruded
+lit terrain and structures, marine-snow parallax); audio plays from the repo's
+own pre-rendered sound pack when served over HTTP and falls back to live Web
+Audio synthesis when opened from disk.
 
-Two mining rigs sit on a hydrothermal field two miles down. Only one is there at
-shift end.
+## The campaign
+
+**Ashes of the Deep** — nine chapters in three acts across the Pacific trench
+system, played through in-engine letterboxed cutscenes with a procedurally
+drawn cast: Commander Voss, Chief Okafor, Director Krane, Dr. Sable, Captain
+Reyne, and the Choir.
+
+Act I is the Consortium's ocean — conquest, quotas, and the hubris that ends in
+the Ventfall Cascade. Act II is the long dark: evacuating a dying field,
+gleaning the wreck-lands, defending refugees. Act III is what the floor
+remembers: first contact with something living in the vents, and the assault on
+Krane's dreadnought rig.
+
+Eight major decisions shape a unity/dominion ledger and persistent flags — you
+can spare or strip a rival's survivors, defy or sign the quota, decide who
+holds the corridor at Ashfall (a beloved character can die there and stays dead
+in every later scene), forge an alliance or absorb a fleet, attune to the Choir
+or harvest it, and pass judgment on Krane. **Four endings**: Dawn Under
+Pressure, The Iron Tide, Gilded Rust, Embers Carried.
+
+Between missions, spend battlefield salvage on six persistent upgrades. Saves
+work at both levels: the campaign autosaves between maps, and the pause menu
+(`F`) holds three full in-map save slots that capture the entire battlefield —
+units, fog, objectives, research in flight.
+
+Free Play (the classic single-map skirmish against the full AI, three
+difficulties) is still on the title screen.
 
 ![VENTFALL gameplay](docs/screenshot.png)
 

@@ -149,7 +149,7 @@ h1 em{font-style:normal;color:var(--glow)}
   <div id="topbar">
     <div class="stat"><span class="k">Ore</span><span class="v" id="oreV">0</span></div>
     <div class="stat"><span class="k">Crew</span><span class="v" id="capV">0/0</span></div>
-    <div class="stat"><span class="k">Rig</span><span class="v" id="armyV" style="color:var(--bone)">0</span></div>
+    <div class="stat"><span class="k">Army</span><span class="v" id="armyV" style="color:var(--bone)">0</span></div>
     <div id="clock">00:00</div>
   </div>
 
@@ -182,14 +182,16 @@ h1 em{font-style:normal;color:var(--glow)}
       <div class="keys">
         <div><kbd>Drag</kbd> Select units</div>
         <div><kbd>Right click</kbd> Move · attack · mine</div>
-        <div><kbd>WASD</kbd> Pan the field</div>
+        <div><kbd>WASD / Arrows</kbd> Pan the field</div>
         <div><kbd>Q</kbd> Attack-move</div>
         <div><kbd>E</kbd> Stop</div>
-        <div><kbd>Ctrl 1–9</kbd> Set group</div>
+        <div><kbd>Ctrl 1–9</kbd> Set group · <kbd>1–9</kbd> Recall</div>
         <div><kbd>Space</kbd> Snap to rig</div>
         <div><kbd>Esc</kbd> Cancel order</div>
         <div><kbd>V B N K</kbd> Build</div>
         <div><kbd>P O U</kbd> Research</div>
+        <div><kbd>D L G · R M Y</kbd> Train (bld selected)</div>
+        <div><kbd>F</kbd> Pause</div>
       </div>
       <button class="btn" id="startBtn">Take command</button>
     </div>
@@ -243,9 +245,9 @@ const BUILDABLE=[["habitat","V"],["foundry","B"],["turret","N"],["deepworks","K"
 
 // Upgrades researched at the Deepworks. Each applies globally to that team.
 const UPGRADES={
-  plating :{name:"Ablative Plating", cost:150, time:30, key:"P", desc:"+25% unit integrity", letter:"P"},
-  optics  :{name:"Pressure Optics",  cost:175, time:34, key:"O", desc:"+18% weapon range",  letter:"O"},
-  servos  :{name:"Servo Drives",     cost:140, time:26, key:"U", desc:"+20% movement speed",letter:"S"}
+  plating :{name:"Ablative Plating", cost:150, time:30, key:"P", desc:"+25% unit integrity"},
+  optics  :{name:"Pressure Optics",  cost:175, time:34, key:"O", desc:"+18% weapon range"},
+  servos  :{name:"Servo Drives",     cost:140, time:26, key:"U", desc:"+20% movement speed"}
 };
 function hasUp(team,k){ return !!(G.up&&G.up[team]&&G.up[team][k]); }
 // Effective stat helpers — upgrades never mutate DEFS.
@@ -261,6 +263,14 @@ const now=()=>performance.now()/1000;
 let seed=1337|0;
 function rnd(){ seed^=seed<<13; seed^=seed>>>17; seed^=seed<<5; return ((seed>>>0)%100000)/100000; }
 function rint(a,b){ return a+Math.floor(rnd()*(b-a+1)); }
+// older engines (Safari <16.4) lack roundRect; drawing code assumes it exists
+if(!CanvasRenderingContext2D.prototype.roundRect){
+  CanvasRenderingContext2D.prototype.roundRect=function(x,y,w,h,r){
+    r=Math.min(Math.abs(r)||0,Math.abs(w)/2,Math.abs(h)/2);
+    this.moveTo(x+r,y); this.arcTo(x+w,y,x+w,y+h,r); this.arcTo(x+w,y+h,x,y+h,r);
+    this.arcTo(x,y+h,x,y,r); this.arcTo(x,y,x+w,y,r); this.closePath(); return this;
+  };
+}
 
 /* ------------------------------- audio ---------------------------------- */
 const Audio_={
@@ -273,6 +283,9 @@ const Audio_={
     this.master.connect(this.ctx.destination);
     this.ready=true; this.ambient();
   },
+  // audio interruptions (iOS, device changes, backgrounded tabs) suspend the
+  // context without telling us — nudge it back on user gestures / tab return
+  resume(){ if(this.ready&&this.ctx.state==="suspended") this.ctx.resume(); },
   noiseBuf(){
     if(this._nb) return this._nb;
     const n=this.ctx.sampleRate*2, b=this.ctx.createBuffer(1,n,this.ctx.sampleRate), d=b.getChannelData(0);
@@ -345,7 +358,7 @@ function newGame(){
   G={
     t:0, started:false, over:null, ore:{[PLAYER]:350,[ENEMY]:350},
     ents:[], nodes:[], projs:[], fx:[], nextId:1,
-    cam:{x:0,y:0}, sel:[], groups:{}, armed:null, rally:null,
+    cam:{x:0,y:0}, sel:[], groups:{}, armed:null,
     blocked:new Uint8Array(MAP_W*MAP_H),
     fog:new Uint8Array(MAP_W*MAP_H),       // 0 unseen · 1 explored · 2 visible
     fogTimer:0, aiTimer:0, wave:0, waveSize:6, firstPush:95, alertCd:0,
@@ -382,10 +395,9 @@ function buildTerrain(){
       tx=clamp(tx+rint(-1,1),1,MAP_W-2); ty=clamp(ty+rint(-1,1),1,MAP_H-2);
     }
   }
-  for(let i=0;i<MAP_W;i++){ // map border
-    G.blocked[bIdx(i,0)]=1; G.blocked[bIdx(i,MAP_H-1)]=1;
-    G.blocked[bIdx(0,i)]=1; G.blocked[bIdx(MAP_W-1,i)]=1;
-  }
+  // map border (loops split per axis so non-square maps stay walled)
+  for(let i=0;i<MAP_W;i++){ G.blocked[bIdx(i,0)]=1; G.blocked[bIdx(i,MAP_H-1)]=1; }
+  for(let i=0;i<MAP_H;i++){ G.blocked[bIdx(0,i)]=1; G.blocked[bIdx(MAP_W-1,i)]=1; }
   for(let i=0;i<26;i++){
     const tx=rint(2,MAP_W-3), ty=rint(2,MAP_H-3);
     if(!G.blocked[bIdx(tx,ty)]) G.vents.push({x:tx*TILE+16,y:ty*TILE+16,ph:rnd()*6.28,s:.5+rnd()*.9});
@@ -445,6 +457,22 @@ function killEnt(e){
   if(e.team===PLAYER) G.stats.lost++; else G.stats.killed++;
   G.ents.forEach(o=>{ if(o.tgt===e) o.tgt=null; if(o.site===e) {o.site=null;o.state="idle";} });
   G.sel=G.sel.filter(s=>s!==e);
+  // active research must not die with its lab: rehome it, or refund and clear
+  for(const tm of [PLAYER,ENEMY]){
+    const r=G.research[tm];
+    if(r&&r.bld===e){
+      const alt=G.ents.find(o=>!o.dead&&o!==e&&o.team===tm&&o.kind==="bld"&&DEFS[o.type].upgrades&&o.built);
+      if(alt) r.bld=alt;
+      else { G.ore[tm]+=UPGRADES[r.key].cost; G.research[tm]=null;
+             if(tm===PLAYER) toast("Research lost — ore refunded",1); }
+    }
+  }
+  // refund anything still queued in a destroyed production building
+  if(e.kind==="bld"&&e.queue&&e.queue.length){
+    const back=e.queue.reduce((s,t)=>s+DEFS[t].cost,0);
+    G.ore[e.team]+=back; e.queue.length=0;
+    if(e.team===PLAYER&&back) fx_text(e.x,e.y-e.r,"+"+back,"#F0C24B");
+  }
 }
 const playerHub=()=>G.ents.find(e=>e.team===PLAYER&&e.type==="hub"&&!e.dead)||{x:WORLD_W/2,y:WORLD_H/2};
 const alive=t=>G.ents.filter(e=>e.team===t&&!e.dead);
@@ -556,10 +584,12 @@ function tryResearch(b,key){
 function tickBld(b,dt){
   if(!b.built){
     if(b.workers>0){
-      b.prog+=dt*b.workers;
-      b.hp=Math.min(b.maxHp, b.maxHp*(.12+.88*(b.prog/b.work)));
+      const dp=dt*b.workers;
+      b.prog+=dp;
+      // additive so damage taken during construction is not healed back
+      b.hp=Math.min(b.maxHp, b.hp+b.maxHp*.88*(dp/b.work));
       if(b.prog>=b.work){
-        b.built=true; b.hp=b.maxHp;
+        b.built=true;
         if(b.team===PLAYER){ Audio_.complete(); toast(DEFS[b.type].name+" online"); G.stats.built++; }
         G.ents.forEach(u=>{ if(u.site===b){ u.site=null; assignNearestNode(u); } });
       }
@@ -595,10 +625,11 @@ function tickBld(b,dt){
       }
     }
   }
-  // turret fire
+  // turret fire — range respects Pressure Optics like every other weapon
   if(DEFS[b.type].dmg){
     b.cd-=dt;
-    if(!b.tgt||b.tgt.dead||dist(b,b.tgt)>DEFS[b.type].rng+10) b.tgt=findTarget(b,DEFS[b.type].rng);
+    const trng=uRng(b.team,DEFS[b.type]);
+    if(!b.tgt||b.tgt.dead||dist(b,b.tgt)>trng+10) b.tgt=findTarget(b,trng);
     if(b.tgt){
       b.face=Math.atan2(b.tgt.y-b.y,b.tgt.x-b.x);
       if(b.cd<=0){ b.cd=DEFS[b.type].rate; shoot(b,b.tgt,DEFS[b.type].dmg,"#FF9A5A"); Audio_.shootT(); }
@@ -627,8 +658,8 @@ function damage(e,dmg,team){
     G.alertCd=9; toast("Rig under attack",1); Audio_.alarm();
     if(e.kind==="bld") pulseCam();
   }
-  // workers defend themselves if struck
-  if(e.kind==="unit"&&!e.tgt&&e.state!=="attack"&&e.team===ENEMY) e.agro=true;
+  // units defend themselves if struck (both teams)
+  if(e.kind==="unit"&&!e.tgt&&e.state!=="attack") e.agro=true;
   if(e.hp<=0) killEnt(e);
 }
 
@@ -670,17 +701,22 @@ function tickUnit(u,dt){
   let mx=null,my=null, stopR=0;
 
   switch(u.state){
-    case "move":
+    case "move": {
       mx=u.tx; my=u.ty; stopR=6;
-      if(u.agro&&u.tgt&&dist(u,u.tgt)<uRng(u.team,d)+u.tgt.r){ mx=null; attackTick(u,d); }
-      if(mx!==null&&Math.hypot(u.x-u.tx,u.y-u.ty)<10) u.state="idle";
-      break;
-    case "attack":
+      if(u.agro&&u.tgt&&!u.tgt.dead){
+        // attack-move closes distance on an acquired target instead of drifting past it
+        const reach=uRng(u.team,d)+u.tgt.r*(u.tgt.kind==="bld"?.75:.6);
+        if(dist(u,u.tgt)>reach){ mx=u.tgt.x; my=u.tgt.y; stopR=reach*.9; }
+        else { mx=null; u.face=Math.atan2(u.tgt.y-u.y,u.tgt.x-u.x); attackTick(u,d); }
+      }
+      else if(mx!==null&&Math.hypot(u.x-u.tx,u.y-u.ty)<10) u.state="idle";
+      break; }
+    case "attack": {
       if(!u.tgt){ u.state="idle"; break; }
       const reach=uRng(u.team,d)+u.tgt.r*(u.tgt.kind==="bld"?.75:.6);
       if(dist(u,u.tgt)>reach){ mx=u.tgt.x; my=u.tgt.y; stopR=reach*.9; }
       else { u.face=Math.atan2(u.tgt.y-u.y,u.tgt.x-u.x); attackTick(u,d); }
-      break;
+      break; }
     case "tomine": {
       if(!u.node||u.node.amt<=0){ if(!assignNearestNode(u)) u.state="idle"; break; }
       if(dist(u,u.node)>20){ mx=u.node.x; my=u.node.y; stopR=18; }
@@ -688,16 +724,16 @@ function tickUnit(u,dt){
       break; }
     case "mining":
       if(u.cd<=0){
-        if(!u.node||u.node.amt<=0){ assignNearestNode(u); break; }
+        if(!u.node||u.node.amt<=0){ if(!assignNearestNode(u)) u.state="idle"; break; }
         const take=Math.min(8,u.node.amt); u.node.amt-=take; u.carry=take;
-        u.state="return"; Audio_.deposit();
+        u.state="return";
       }
       break;
     case "return": {
       const hub=nearestDrop(u);
       if(!hub){ u.state="idle"; break; }
       if(dist(u,hub)>hub.r+10){ mx=hub.x; my=hub.y; stopR=hub.r+8; }
-      else { G.ore[u.team]+=u.carry; if(u.team===PLAYER) G.stats.mined+=u.carry;
+      else { G.ore[u.team]+=u.carry; if(u.team===PLAYER){ G.stats.mined+=u.carry; Audio_.deposit(); }
              fx_text(hub.x,hub.y-hub.r,"+"+u.carry,"#F0C24B"); u.carry=0; u.state="tomine"; }
       break; }
     case "tobuild": {
@@ -717,12 +753,12 @@ function tickUnit(u,dt){
     if(sp<uSpd(u.team,d)*.25&&Math.hypot(mx-u.x,my-u.y)>stopR+12){
       u.stuck=(u.stuck||0)+dt;
       if(u.stuck>.55){
-        const a=Math.atan2(my-u.y,mx-u.x)+(u.side>=0?1.55:-1.55);
-        u.vx+=Math.cos(a)*uSpd(u.team,d)*1.15; u.vy+=Math.sin(a)*uSpd(u.team,d)*1.15;
+        const a=Math.atan2(my-u.y,mx-u.x)+(u.side>=0?1.55:-1.55), kf=Math.min(2,dt*60);
+        u.vx+=Math.cos(a)*uSpd(u.team,d)*1.15*kf; u.vy+=Math.sin(a)*uSpd(u.team,d)*1.15*kf;
         if(u.stuck>1.9){ u.stuck=0; u.side=-(u.side||1); }
       }
     } else u.stuck=0;
-  } else { u.vx*=.82; u.vy*=.82; u.stuck=0; }
+  } else { const dm=Math.pow(.82,dt*60); u.vx*=dm; u.vy*=dm; u.stuck=0; }
   separate(u,dt);
   u.x=clamp(u.x+u.vx*dt,12,WORLD_W-12);
   u.y=clamp(u.y+u.vy*dt,12,WORLD_H-12);
@@ -746,7 +782,7 @@ function nearestDrop(u){
 }
 function steer(u,tx,ty,spd,dt,stopR){
   let dx=tx-u.x, dy=ty-u.y, m=Math.hypot(dx,dy);
-  if(m<Math.max(2,stopR*.6)){ u.vx*=.7; u.vy*=.7; return; }
+  if(m<Math.max(2,stopR*.6)){ const dm=Math.pow(.7,dt*60); u.vx*=dm; u.vy*=dm; return; }
   dx/=m; dy/=m;
   // slide around blocked tiles by sampling ahead
   const look=22, base=Math.atan2(dy,dx);
@@ -779,8 +815,8 @@ function separate(u,dt){
   u.vx+=px*130*dt*8; u.vy+=py*130*dt*8;
   // push out of walls
   if(solid(u.x,u.y)){
-    const cx=((u.x/TILE|0)+.5)*TILE, cy=((u.y/TILE|0)+.5)*TILE;
-    u.vx+=(u.x-cx)*3.4; u.vy+=(u.y-cy)*3.4;
+    const cx=((u.x/TILE|0)+.5)*TILE, cy=((u.y/TILE|0)+.5)*TILE, kf=Math.min(2,dt*60);
+    u.vx+=(u.x-cx)*3.4*kf; u.vy+=(u.y-cy)*3.4*kf;
   }
 }
 
@@ -920,7 +956,14 @@ function canPlace(tx,ty,d){
   return true;
 }
 function nearOwnBase(team,cx,cy){
-  return G.ents.some(e=>!e.dead&&e.team===team&&e.kind==="bld"&&e.built&&Math.hypot(e.x-cx,e.y-cy)<330);
+  // a team with no standing structures may rebuild anywhere it can see (comeback rule)
+  let any=false;
+  for(const e of G.ents){
+    if(e.dead||e.team!==team||e.kind!=="bld"||!e.built) continue;
+    any=true;
+    if(Math.hypot(e.x-cx,e.y-cy)<330) return true;
+  }
+  return !any;
 }
 function placeBuilding(type,wx,wy){
   const d=DEFS[type];
@@ -946,11 +989,14 @@ let VW=0,VH=0,DPR=1;
 let terrainC=null, miniC=null;
 
 function resize(){
-  DPR=Math.min(window.devicePixelRatio||1,2);
+  DPR=Math.min(window.devicePixelRatio||1,3);
   VW=view.clientWidth; VH=view.clientHeight;
-  view.width=VW*DPR; view.height=VH*DPR;
+  view.width=Math.round(VW*DPR); view.height=Math.round(VH*DPR);
   ctx.setTransform(DPR,0,0,DPR,0,0);
   ctx.imageSmoothingEnabled=true;
+  // sonar backing store tracks DPR too (was hardcoded 292 = an implicit 2x)
+  const sS=Math.round(146*DPR);
+  if(sonar.width!==sS){ sonar.width=sS; sonar.height=sS; }
 }
 function prerenderTerrain(){
   terrainC=document.createElement("canvas");
@@ -1254,13 +1300,12 @@ function drawFog(){
 const sonar=document.getElementById("sonar"), sx=sonar.getContext("2d");
 let sweep=0, pingT=0;
 function drawSonar(dt){
-  const S=292, R=S/2;
+  const S=sonar.width, R=S/2;
   sweep+=dt*1.15; pingT-=dt;
   if(pingT<=0){ pingT=4.2; if(G.started&&!G.over) Audio_.ping(); }
   sx.clearRect(0,0,S,S);
   sx.save(); sx.beginPath(); sx.arc(R,R,R-2,0,6.284); sx.clip();
   sx.fillStyle="#050D12"; sx.fillRect(0,0,S,S);
-  const k=S/MAP_W;
   sx.imageSmoothingEnabled=false;
   sx.globalAlpha=.85; sx.drawImage(miniC,0,0,S,S); sx.globalAlpha=1;
   // fog — reuse the cached bitmap instead of thousands of fillRects
@@ -1278,7 +1323,7 @@ function drawSonar(dt){
     const boost=da<1.1?(1-da/1.1)*.9:0;
     sx.globalAlpha=.72+boost;
     sx.fillStyle=e.team===PLAYER?"#57E8CC":"#FF6A34";
-    const s=e.kind==="bld"?4.5:2.4;
+    const s=(e.kind==="bld"?4.5:2.4)*(S/292);
     sx.fillRect(px-s/2,py-s/2,s,s);
   }
   sx.globalAlpha=1;
@@ -1332,7 +1377,7 @@ function updateHUD(){
   if(!sel.length){
     title.textContent="No selection";
     sub.textContent="Drag a box over your units, or click a structure.";
-    stats.innerHTML=""; roster.innerHTML=""; queue.innerHTML="";
+    stats.innerHTML=""; roster.innerHTML=""; queue.innerHTML=""; lastSig.roster="";
   } else if(sel.length===1){
     const e=sel[0], d=DEFS[e.type];
     title.textContent=d.name;
@@ -1341,13 +1386,14 @@ function updateHUD(){
                  : "Under construction — "+Math.round(e.prog/e.work*100)+"%")
       : ({tomine:"Moving to seam",mining:"Extracting ore",return:"Hauling to rig",
           tobuild:"Building",attack:"Engaging",move:"Moving"}[e.state]||"Standing by");
-    if(d.desc) sub.textContent=d.desc;
+    // flavour text only when the unit has nothing better to report
+    if(d.desc&&e.kind==="unit"&&e.state==="idle") sub.textContent=d.desc;
     stats.innerHTML=
       `<div><b>Integrity</b><span>${Math.max(0,Math.round(e.hp))} / ${e.maxHp}</span></div>`+
       (d.dmg?`<div><b>Damage</b><span>${d.dmg}</span></div><div><b>Range</b><span>${d.rng}</span></div>`:"")+
       (e.carry?`<div><b>Carrying</b><span>${e.carry} ore</span></div>`:"")+
       (d.gives&&e.built?`<div><b>Crew berths</b><span>+${d.gives}</span></div>`:"");
-    roster.innerHTML="";
+    roster.innerHTML=""; lastSig.roster="";
   } else {
     const byType={}; sel.forEach(e=>byType[e.type]=(byType[e.type]||0)+1);
     title.textContent=sel.length+" selected";
@@ -1430,6 +1476,7 @@ function updateHUD(){
 
 /* ------------------------------- input ----------------------------------- */
 const mouse={x:-1,y:-1,inside:false}, drag={on:false,x0:0,y0:0,moved:false};
+const lastClick={t:0,id:0,x:0,y:0};
 let attackMove=false;
 const keys={};
 function arm(t){ G.armed=G.armed===t?null:t; attackMove=false; Audio_.click(); }
@@ -1437,11 +1484,13 @@ function armAttackMove(){ attackMove=true; G.armed=null; Audio_.click(); }
 
 view.addEventListener("contextmenu",e=>e.preventDefault());
 view.addEventListener("pointerdown",e=>{
+  Audio_.resume();
   if(!G.started||G.over) return;
   view.setPointerCapture(e.pointerId);
   const r=view.getBoundingClientRect();
   mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top;
   if(e.button===2){
+    drag.on=false; drag.moved=false;          // right-click mid-drag must not strand the marquee
     const w=s2w(mouse.x,mouse.y);
     G.armed=null; attackMove=false; issue(w.x,w.y,e.shiftKey);
     return;
@@ -1466,6 +1515,7 @@ view.addEventListener("pointermove",e=>{
 });
 view.addEventListener("pointerenter",()=>{ mouse.inside=true; });
 view.addEventListener("pointerleave",()=>{ if(!drag.on) mouse.inside=false; });
+view.addEventListener("pointercancel",()=>{ drag.on=false; drag.moved=false; mouse.inside=false; });
 view.addEventListener("pointerup",e=>{
   if(e.button!==0||!drag.on) return;
   drag.on=false;
@@ -1485,7 +1535,13 @@ view.addEventListener("pointerup",e=>{
     const w=s2w(mouse.x,mouse.y), hit=pickAt(w.x,w.y);
     if(hit&&hit.kind==="ent"&&hit.e.team===PLAYER){
       if(!G.sel.includes(hit.e)) G.sel.push(hit.e);
-      if(e.detail>=2&&hit.e.kind==="unit"){ // double-click: all of type on screen
+      // manual double-tap tracker: pointerup's e.detail is unreliable across browsers
+      // and never fires for touch
+      const tN=performance.now();
+      const dbl=tN-lastClick.t<350&&lastClick.id===hit.e.id&&
+                Math.hypot(mouse.x-lastClick.x,mouse.y-lastClick.y)<14;
+      lastClick.t=tN; lastClick.id=hit.e.id; lastClick.x=mouse.x; lastClick.y=mouse.y;
+      if(dbl&&hit.e.kind==="unit"){ // double-click: all of type on screen
         G.sel=G.ents.filter(en=>!en.dead&&en.team===PLAYER&&en.type===hit.e.type&&
           en.x>G.cam.x&&en.x<G.cam.x+VW&&en.y>G.cam.y&&en.y<G.cam.y+VH);
       }
@@ -1493,16 +1549,24 @@ view.addEventListener("pointerup",e=>{
   }
   if(G.sel.length) Audio_.select();
 });
+const lastRecall={key:"",t:0};
 window.addEventListener("keydown",e=>{
-  if(!G.started) return;
+  if(!G.started||G.over) return;
   const k=e.key.toLowerCase();
   keys[k]=true;
+  if(e.repeat) return;   // camera pan uses `keys`; every action below is one-shot
   if(e.ctrlKey&&/^[1-9]$/.test(e.key)){
     G.groups[e.key]=G.sel.slice(); toast("Group "+e.key+" set"); Audio_.click(); e.preventDefault(); return;
   }
   if(/^[1-9]$/.test(e.key)&&G.groups[e.key]){
     G.sel=G.groups[e.key].filter(x=>!x.dead);
-    if(G.sel.length){ Audio_.select(); if(e.repeat||true) centerOn(G.sel[0]); }
+    if(G.sel.length){
+      Audio_.select();
+      // double-tap a group key to snap the camera to it
+      const tN=performance.now();
+      if(lastRecall.key===e.key&&tN-lastRecall.t<400) centerOn(G.sel[0]);
+      lastRecall.key=e.key; lastRecall.t=tN;
+    }
     return;
   }
   if(k==="escape"){ G.armed=null; attackMove=false; }
@@ -1518,7 +1582,18 @@ window.addEventListener("keydown",e=>{
     Object.entries(UPGRADES).forEach(([key,u])=>{ if(u.key.toLowerCase()===k) tryResearch(pb,key); });
 });
 window.addEventListener("keyup",e=>{ keys[e.key.toLowerCase()]=false; });
-window.addEventListener("blur",()=>{ for(const k in keys) keys[k]=false; });
+function resetInput(){
+  for(const k in keys) keys[k]=false;
+  drag.on=false; drag.moved=false; mouse.inside=false;
+  attackMove=false; camShake=0;
+  lastSig.cmds=""; lastSig.roster=""; lastSig.queue="";
+  lastRecall.key=""; lastRecall.t=0;
+}
+window.addEventListener("blur",()=>{ resetInput(); });
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="visible") Audio_.resume();
+  else resetInput();
+});
 
 function tickCamera(dt){
   const sp=760*dt;
@@ -1595,6 +1670,7 @@ el("startBtn").onclick=()=>{
 };
 el("againBtn").onclick=()=>{
   el("endScreen").classList.add("hide");
+  resetInput();
   newGame(); prerenderTerrain(); G.started=true; centerOn(playerHub());
 };
 boot();

@@ -42,6 +42,11 @@ body{user-select:none;-webkit-user-select:none;touch-action:none}
 #capV{color:var(--glow)}
 #capV.tight{color:var(--vent)}
 #clock{margin-left:auto;color:var(--mute);font-size:13px;font-variant-numeric:tabular-nums}
+#audioCtl{display:flex;align-items:center;gap:8px;pointer-events:auto}
+#muteBtn{background:none;border:1px solid var(--edge-hi);color:var(--glow);width:24px;height:24px;
+  cursor:pointer;font-size:12px;line-height:1;display:grid;place-items:center}
+#muteBtn.off{color:var(--mute);border-color:var(--edge)}
+#volSlider{width:70px;accent-color:var(--glow);cursor:pointer}
 
 /* ---------- toasts ---------- */
 #toasts{position:absolute;top:52px;left:50%;transform:translateX(-50%);
@@ -151,6 +156,10 @@ h1 em{font-style:normal;color:var(--glow)}
     <div class="stat"><span class="k">Crew</span><span class="v" id="capV">0/0</span></div>
     <div class="stat"><span class="k">Army</span><span class="v" id="armyV" style="color:var(--bone)">0</span></div>
     <div id="clock">00:00</div>
+    <div id="audioCtl">
+      <button id="muteBtn" title="Mute" aria-label="Mute audio">♪</button>
+      <input id="volSlider" type="range" min="0" max="100" value="50" aria-label="Volume">
+    </div>
   </div>
 
   <div id="toasts"></div>
@@ -274,18 +283,46 @@ if(!CanvasRenderingContext2D.prototype.roundRect){
 
 /* ------------------------------- audio ---------------------------------- */
 const Audio_={
-  ctx:null, master:null, ready:false, last:{},
+  ctx:null, master:null, ready:false, last:{}, buffers:{}, vol:.5, muted:false,
   init(){
     if(this.ready) return;
     const AC=window.AudioContext||window.webkitAudioContext; if(!AC) return;
     this.ctx=new AC();
-    this.master=this.ctx.createGain(); this.master.gain.value=.5;
+    this.master=this.ctx.createGain();
     this.master.connect(this.ctx.destination);
-    this.ready=true; this.ambient();
+    this.ready=true; this.apply(); this.loadPack(); this.ambient();
   },
   // audio interruptions (iOS, device changes, backgrounded tabs) suspend the
   // context without telling us — nudge it back on user gestures / tab return
   resume(){ if(this.ready&&this.ctx.state==="suspended") this.ctx.resume(); },
+  apply(){ if(this.master) this.master.gain.value=this.muted?0:this.vol; },
+  setVolume(v){ this.vol=clamp(v,0,1); this.apply(); },
+  setMuted(m){ this.muted=!!m; this.apply(); },
+  /* The repo ships pre-rendered mp3s of every cue (audio/AUDIO.md). Fetch what
+     we can; every cue keeps its synth body as fallback, so audio still works
+     in full when the page is opened from file:// or offline. */
+  loadPack(){
+    if(this._loading||typeof fetch!=="function") return; this._loading=true;
+    ["ui_select","ui_click","ui_denied","order_move","order_attack","build_place",
+     "build_complete","weapon_light","weapon_heavy","impact","explosion_small",
+     "explosion_large","ore_deposit","sonar_ping","alarm_underattack","sting_victory",
+     "sting_defeat","ambient_loop","alert_resources","alert_capacity","alert_unit_ready",
+     "alert_research","alert_lost","repair_loop"].forEach(n=>{
+      fetch("audio/mp3/"+n+".mp3")
+        .then(r=>{ if(!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+        .then(ab=>this.ctx.decodeAudioData(ab))
+        .then(b=>{ this.buffers[n]=b;
+                   if(n==="ambient_loop"&&this._amb) this.ambient(); })
+        .catch(()=>{});
+    });
+  },
+  playBuf(n,vol){
+    const b=this.ready&&this.buffers[n]; if(!b) return false;
+    const s=this.ctx.createBufferSource(), g=this.ctx.createGain();
+    s.buffer=b; g.gain.value=vol==null?1:vol;
+    s.connect(g); g.connect(this.master); s.start();
+    return true;
+  },
   noiseBuf(){
     if(this._nb) return this._nb;
     const n=this.ctx.sampleRate*2, b=this.ctx.createBuffer(1,n,this.ctx.sampleRate), d=b.getChannelData(0);
@@ -315,41 +352,67 @@ const Audio_={
     s.connect(bp); bp.connect(g); g.connect(this.master); s.start(t); s.stop(t+dur+.03);
   },
   ambient(){
-    const t=this.ctx.currentTime;
-    const o=this.ctx.createOscillator(), g=this.ctx.createGain(), lfo=this.ctx.createOscillator(), lg=this.ctx.createGain();
-    o.type="sine"; o.frequency.value=41; g.gain.value=.055;
-    lfo.type="sine"; lfo.frequency.value=.07; lg.gain.value=9;
-    lfo.connect(lg); lg.connect(o.frequency);
-    const f=this.ctx.createBiquadFilter(); f.type="lowpass"; f.frequency.value=220;
-    o.connect(f); f.connect(g); g.connect(this.master); o.start(t); lfo.start(t);
-    // slow filtered surge, like water moving over the vents
-    const s=this.ctx.createBufferSource(); s.buffer=this.noiseBuf(); s.loop=true;
-    const nf=this.ctx.createBiquadFilter(); nf.type="lowpass"; nf.frequency.value=150;
-    const ng=this.ctx.createGain(); ng.gain.value=.03;
-    s.connect(nf); nf.connect(ng); ng.connect(this.master); s.start(t);
+    if(!this.ready) return;
+    this.stopAmbient();
+    const nodes=[];
+    if(this.buffers.ambient_loop){
+      const s=this.ctx.createBufferSource(); s.buffer=this.buffers.ambient_loop; s.loop=true;
+      const g=this.ctx.createGain(); g.gain.value=.5;
+      s.connect(g); g.connect(this.master); s.start(); nodes.push(s);
+    } else {
+      const t=this.ctx.currentTime;
+      const o=this.ctx.createOscillator(), g=this.ctx.createGain(), lfo=this.ctx.createOscillator(), lg=this.ctx.createGain();
+      o.type="sine"; o.frequency.value=41; g.gain.value=.055;
+      lfo.type="sine"; lfo.frequency.value=.07; lg.gain.value=9;
+      lfo.connect(lg); lg.connect(o.frequency);
+      const f=this.ctx.createBiquadFilter(); f.type="lowpass"; f.frequency.value=220;
+      o.connect(f); f.connect(g); g.connect(this.master); o.start(t); lfo.start(t);
+      // slow filtered surge, like water moving over the vents
+      const s=this.ctx.createBufferSource(); s.buffer=this.noiseBuf(); s.loop=true;
+      const nf=this.ctx.createBiquadFilter(); nf.type="lowpass"; nf.frequency.value=150;
+      const ng=this.ctx.createGain(); ng.gain.value=.03;
+      s.connect(nf); nf.connect(ng); ng.connect(this.master); s.start(t);
+      nodes.push(o,lfo,s);
+    }
+    this._amb=nodes;
   },
-  select(){ this.tone(880,1180,.07,"triangle",.1); },
-  order(){ this.tone(520,700,.06,"square",.055); },
-  attackOrder(){ this.tone(300,180,.13,"sawtooth",.075); },
-  place(){ this.tone(190,120,.16,"square",.09); },
-  complete(){ [523,659,880].forEach((f,i)=>this.tone(f,f,.2,"triangle",.075,i*.075)); },
-  shootS(){ if(this.gate("ss",55)) {this.noise(.07,.1,1700,600,2.4); this.tone(420,150,.06,"square",.045);} },
-  shootT(){ if(this.gate("st",70)) {this.noise(.11,.13,900,240,1.7); this.tone(200,70,.11,"sawtooth",.06);} },
-  hit(){ if(this.gate("h",45)) this.noise(.05,.075,2400,900,3); },
+  stopAmbient(){
+    if(!this._amb) return;
+    for(const n of this._amb){ try{ n.stop(); }catch(_){} }
+    this._amb=null;
+  },
+  /* Every cue: pre-rendered pack first, live synthesis as fallback. */
+  select(){ if(!this.playBuf("ui_select",.6)) this.tone(880,1180,.07,"triangle",.1); },
+  order(){ if(!this.playBuf("order_move",.5)) this.tone(520,700,.06,"square",.055); },
+  attackOrder(){ if(!this.playBuf("order_attack",.55)) this.tone(300,180,.13,"sawtooth",.075); },
+  place(){ if(!this.playBuf("build_place",.65)) this.tone(190,120,.16,"square",.09); },
+  complete(){ if(!this.playBuf("build_complete",.55)) [523,659,880].forEach((f,i)=>this.tone(f,f,.2,"triangle",.075,i*.075)); },
+  unitReady(){ if(!this.playBuf("alert_unit_ready",.5)) [523,659,880].forEach((f,i)=>this.tone(f,f,.2,"triangle",.075,i*.075)); },
+  shootS(){ if(this.gate("ss",55)&&!this.playBuf("weapon_light",.35)) {this.noise(.07,.1,1700,600,2.4); this.tone(420,150,.06,"square",.045);} },
+  shootT(){ if(this.gate("st",70)&&!this.playBuf("weapon_heavy",.42)) {this.noise(.11,.13,900,240,1.7); this.tone(200,70,.11,"sawtooth",.06);} },
+  hit(){ if(this.gate("h",45)&&!this.playBuf("impact",.3)) this.noise(.05,.075,2400,900,3); },
   boom(big){
     if(!this.gate(big?"bb":"bs",big?120:70)) return;
+    if(this.playBuf(big?"explosion_large":"explosion_small",big?.8:.55)) return;
     this.noise(big?.62:.3, big?.3:.19, big?420:700, big?45:90, .85);
     this.tone(big?95:150, big?26:45, big?.55:.28, "sine", big?.2:.12);
   },
-  deposit(){ if(this.gate("dp",90)) this.tone(1050,1500,.05,"sine",.05); },
-  ping(){ this.tone(1420,1420,.5,"sine",.028); },
-  heal(){ if(this.gate("hl",120)) this.tone(880,1320,.14,"sine",.045); },
-  research(){ [440,554,659,880].forEach((f,i)=>this.tone(f,f,.3,"triangle",.07,i*.1)); },
-  alarm(){ [0,.19].forEach(d=>this.tone(760,520,.16,"square",.11,d)); },
-  denied(){ this.tone(200,150,.11,"square",.075); },
-  click(){ this.tone(1300,1300,.025,"square",.045); },
-  win(){ [392,523,659,784].forEach((f,i)=>this.tone(f,f,.42,"triangle",.1,i*.13)); },
-  lose(){ [330,262,196,147].forEach((f,i)=>this.tone(f,f*.98,.5,"sawtooth",.085,i*.16)); }
+  deposit(){ if(this.gate("dp",90)&&!this.playBuf("ore_deposit",.5)) this.tone(1050,1500,.05,"sine",.05); },
+  ping(){ if(!this.playBuf("sonar_ping",.3)) this.tone(1420,1420,.5,"sine",.028); },
+  heal(){
+    if(this.buffers.repair_loop){ if(this.gate("hl",1100)) this.playBuf("repair_loop",.26); }
+    else if(this.gate("hl",120)) this.tone(880,1320,.14,"sine",.045);
+  },
+  research(){ if(!this.playBuf("alert_research",.6)) [440,554,659,880].forEach((f,i)=>this.tone(f,f,.3,"triangle",.07,i*.1)); },
+  alarm(){ if(!this.playBuf("alarm_underattack",.65)) [0,.19].forEach(d=>this.tone(760,520,.16,"square",.11,d)); },
+  denied(){ if(!this.playBuf("ui_denied",.55)) this.tone(200,150,.11,"square",.075); },
+  click(){ if(!this.playBuf("ui_click",.5)) this.tone(1300,1300,.025,"square",.045); },
+  win(){ if(!this.playBuf("sting_victory",.85)) [392,523,659,784].forEach((f,i)=>this.tone(f,f,.42,"triangle",.1,i*.13)); },
+  lose(){ if(!this.playBuf("sting_defeat",.85)) [330,262,196,147].forEach((f,i)=>this.tone(f,f*.98,.5,"sawtooth",.085,i*.16)); },
+  // advisor cues (pack-only, heavily throttled per AUDIO.md guidance)
+  alertRes(){ if(this.gate("ares",4000)&&this.playBuf("alert_resources",.55)) return; this.denied(); },
+  alertCap(){ if(this.gate("acap",4000)&&this.playBuf("alert_capacity",.55)) return; this.denied(); },
+  alertLost(){ if(this.gate("alost",4000)) this.playBuf("alert_lost",.6); }
 };
 
 /* ------------------------------- state ---------------------------------- */
@@ -456,6 +519,7 @@ function killEnt(e){
     boom(e.x,e.y,e.r*1.5,true);
   } else boom(e.x,e.y,e.r*1.4,false);
   if(e.team===PLAYER) G.stats.lost++; else G.stats.killed++;
+  if(e.team===PLAYER&&e.kind==="bld") Audio_.alertLost();
   G.ents.forEach(o=>{ if(o.tgt===e) o.tgt=null; if(o.site===e) {o.site=null;o.state="idle";} });
   G.sel=G.sel.filter(s=>s!==e);
   // active research must not die with its lab: rehome it, or refund and clear
@@ -566,8 +630,8 @@ function tryTrain(b,type){
   if(d.needs&&!G.ents.some(e=>!e.dead&&e.team===team&&e.type===d.needs&&e.built)){
     if(team===PLAYER){toast("Requires "+DEFS[d.needs].name,1);Audio_.denied();} return false;
   }
-  if(G.ore[team]<d.cost){ if(team===PLAYER){toast("Not enough ore",1);Audio_.denied();} return false; }
-  if(cap.used+d.cap>cap.max){ if(team===PLAYER){toast("Crew capacity reached — build a Habitat",1);Audio_.denied();} return false; }
+  if(G.ore[team]<d.cost){ if(team===PLAYER){toast("Not enough ore",1);Audio_.alertRes();} return false; }
+  if(cap.used+d.cap>cap.max){ if(team===PLAYER){toast("Crew capacity reached — build a Habitat",1);Audio_.alertCap();} return false; }
   if(b.queue.length>=5){ if(team===PLAYER)Audio_.denied(); return false; }
   G.ore[team]-=d.cost; b.queue.push(type);
   if(b.queue.length===1) b.qTime=d.train;
@@ -578,7 +642,7 @@ function tryResearch(b,key){
   const team=b.team, u=UPGRADES[key];
   if(G.up[team][key]){ if(team===PLAYER){toast("Already researched",1);Audio_.denied();} return false; }
   if(G.research[team]){ if(team===PLAYER){toast("Research already in progress",1);Audio_.denied();} return false; }
-  if(G.ore[team]<u.cost){ if(team===PLAYER){toast("Not enough ore",1);Audio_.denied();} return false; }
+  if(G.ore[team]<u.cost){ if(team===PLAYER){toast("Not enough ore",1);Audio_.alertRes();} return false; }
   G.ore[team]-=u.cost;
   G.research[team]={key,t:u.time,total:u.time,bld:b};
   if(team===PLAYER) Audio_.click();
@@ -608,7 +672,7 @@ function tickBld(b,dt){
       if(b.rally) orderMove(u,b.rally.x,b.rally.y,true);
       else if(DEFS[type].worker) assignNearestNode(u,b);
       if(b.queue.length) b.qTime=DEFS[b.queue[0]].train;
-      if(b.team===PLAYER) Audio_.complete();
+      if(b.team===PLAYER) Audio_.unitReady();
     }
   }
   // research
@@ -979,7 +1043,7 @@ function placeBuilding(type,wx,wy){
   if(!nearOwnBase(PLAYER,cx,cy)){ toast("Too far from your rig",1); Audio_.denied(); return false; }
   if(d.needs&&!G.ents.some(e=>!e.dead&&e.team===PLAYER&&e.type===d.needs&&e.built)){
     toast("Requires "+DEFS[d.needs].name,1); Audio_.denied(); return false; }
-  if(G.ore[PLAYER]<d.cost){ toast("Not enough ore",1); Audio_.denied(); return false; }
+  if(G.ore[PLAYER]<d.cost){ toast("Not enough ore",1); Audio_.alertRes(); return false; }
   if(!seenAt(cx,cy)){ toast("Scout that ground first",1); Audio_.denied(); return false; }
   G.ore[PLAYER]-=d.cost;
   const b=spawnBld(type,PLAYER,tx,ty,false);
@@ -1662,6 +1726,7 @@ function checkEnd(){
 }
 function endGame(win){
   G.over=win?"win":"lose";
+  Audio_.stopAmbient();
   win?Audio_.win():Audio_.lose();
   el("endEyebrow").textContent="Shift report · "+String(Math.floor(G.t/60)).padStart(2,"0")+":"+String(Math.floor(G.t%60)).padStart(2,"0");
   const ti=el("endTitle"); ti.className=win?"win":"lose";
@@ -1677,8 +1742,29 @@ function endGame(win){
   el("endScreen").classList.remove("hide");
 }
 
+/* ------------------------- settings persistence --------------------------- */
+const store={
+  read(k,fb){ try{ const v=localStorage.getItem("ventfall."+k); return v==null?fb:JSON.parse(v); }catch(_){ return fb; } },
+  write(k,v){ try{ localStorage.setItem("ventfall."+k,JSON.stringify(v)); }catch(_){} }
+};
+function saveSettings(){ store.write("settings",{vol:Audio_.vol,muted:Audio_.muted}); }
+function loadSettings(){
+  const s=store.read("settings",null); if(!s) return;
+  if(typeof s.vol==="number") Audio_.vol=clamp(s.vol,0,1);
+  Audio_.muted=!!s.muted;
+}
+const volS=el("volSlider"), muteB=el("muteBtn");
+function syncAudioCtl(){
+  volS.value=Math.round(Audio_.vol*100);
+  muteB.classList.toggle("off",Audio_.muted);
+  muteB.textContent=Audio_.muted?"✕":"♪";
+}
+volS.oninput=()=>{ Audio_.setVolume(volS.value/100); saveSettings(); };
+muteB.onclick=()=>{ Audio_.setMuted(!Audio_.muted); syncAudioCtl(); saveSettings(); };
+
 /* --------------------------------- boot ----------------------------------- */
 function boot(){
+  loadSettings(); syncAudioCtl();
   resize(); newGame(); prerenderTerrain(); updateHUD();
 }
 window.addEventListener("resize",()=>{ resize(); });
@@ -1691,6 +1777,7 @@ el("startBtn").onclick=()=>{
 el("againBtn").onclick=()=>{
   el("endScreen").classList.add("hide");
   resetInput();
+  Audio_.ambient();
   newGame(); prerenderTerrain(); G.started=true; centerOn(playerHub());
 };
 boot();

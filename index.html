@@ -1762,6 +1762,18 @@ const s2w=(sx,sy)=>({x:sx/zoom+G.cam.x,y:sy/zoom+G.cam.y});
 function centerOn(e){ G.cam.x=clamp(e.x-vw()/2,0,Math.max(0,WORLD_W-vw())); G.cam.y=clamp(e.y-vh()/2,0,Math.max(0,WORLD_H-vh())); }
 const TEAMC=[{a:"#57E8CC",b:"#1E6F63",d:"#0B2E2A"},{a:"#FF7A45",b:"#8C3A1C",d:"#33150B"},
              {a:"#C77DFF",b:"#5E3A8C",d:"#241238"}];   // ally: Reyne violet
+// midwater particle layer + cached vignette
+const SNOW=Array.from({length:64},(_,i)=>({x:(i*.618)%1,y:(i*.383)%1,s:.3+((i*7)%10)/12,r:.8+((i*3)%5)*.5}));
+let vigC=null;
+function buildVignette(){
+  vigC=document.createElement("canvas");
+  vigC.width=view.width; vigC.height=view.height;
+  const g=vigC.getContext("2d");
+  const rg=g.createRadialGradient(vigC.width/2,vigC.height/2,Math.min(vigC.width,vigC.height)*.42,
+                                  vigC.width/2,vigC.height/2,Math.max(vigC.width,vigC.height)*.75);
+  rg.addColorStop(0,"rgba(1,4,7,0)"); rg.addColorStop(1,"rgba(1,4,7,.42)");
+  g.fillStyle=rg; g.fillRect(0,0,vigC.width,vigC.height);
+}
 
 function render(){
   const sx=camShake>0?(Math.random()-.5)*camShake:0, sy=camShake>0?(Math.random()-.5)*camShake:0;
@@ -1893,6 +1905,32 @@ function render(){
   drawFog();
   ctx.restore();
 
+  // ---- midwater atmosphere (screen space) ----
+  // marine snow with slight camera parallax: reads as a layer above the floor
+  ctx.fillStyle="rgba(185,225,230,.6)";
+  for(const p of SNOW){
+    p.y+=p.s*.0004; if(p.y>1) p.y-=1;
+    const sxp=((p.x - G.cam.x/WORLD_W*.10*p.s + Math.sin(G.t*.25+p.x*11)*.004)%1+1)%1*VW;
+    const syp=((p.y - G.cam.y/WORLD_H*.10*p.s)%1+1)%1*VH;
+    ctx.globalAlpha=.10+.22*p.s;
+    ctx.fillRect(sxp,syp,p.r,p.r);
+  }
+  ctx.globalAlpha=1;
+  // surface light shafts, swaying slowly
+  for(let i=0;i<2;i++){
+    const lx=VW*(.28+.4*i)+Math.sin(G.t*.11+i*2.6)*VW*.05;
+    const lg=ctx.createLinearGradient(lx,0,lx+VW*.1,VH);
+    lg.addColorStop(0,"rgba(90,190,200,.045)"); lg.addColorStop(1,"rgba(90,190,200,0)");
+    ctx.fillStyle=lg;
+    ctx.beginPath(); ctx.moveTo(lx,0); ctx.lineTo(lx+VW*.09,0);
+    ctx.lineTo(lx+VW*.2,VH); ctx.lineTo(lx+VW*.04,VH); ctx.closePath(); ctx.fill();
+  }
+  // pressure vignette
+  if(!vigC||vigC.width!==view.width||vigC.height!==view.height) buildVignette();
+  ctx.save(); ctx.setTransform(1,0,0,1,0,0);
+  ctx.drawImage(vigC,0,0);
+  ctx.restore();
+
   // selection marquee
   if(drag.on&&drag.moved){
     const x=Math.min(drag.x0,mouse.x), y=Math.min(drag.y0,mouse.y);
@@ -1966,6 +2004,9 @@ function drawUnit(u){
     ctx.fillStyle=c.b; ctx.beginPath(); ctx.arc(0,0,r*.8,0,6.284); ctx.fill();
   }
   ctx.restore();
+  // NW rim light — sells the hull as a solid in the water column
+  ctx.strokeStyle="rgba(150,225,230,.20)"; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.arc(u.x-1.5,u.y+1.5,u.r*.92,3.35,5.05); ctx.stroke();
   hpBar(u,u.r*2.4);
   // veterancy chevrons
   if(u.rank>0){
@@ -1981,7 +2022,13 @@ function drawUnit(u){
 function drawBld(b){
   const c=TEAMC[b.team], W=b.w*TILE, H=b.h*TILE, x=b.tx*TILE, y=b.ty*TILE;
   const selD=G.sel.includes(b);
-  ctx.fillStyle="rgba(0,0,0,.4)"; ctx.fillRect(x+3,y+5,W,H);
+  ctx.fillStyle="rgba(0,0,0,.4)"; ctx.fillRect(x+4,y+7,W,H);
+  // extrusion: a dark structural plinth under the lifted superstructure
+  if(b.built){
+    ctx.fillStyle="#0C1720"; ctx.fillRect(x+2,y+H-7,W-4,11);
+    ctx.fillStyle="rgba(3,7,11,.75)"; ctx.fillRect(x+2,y+H+2,W-4,2);
+  }
+  ctx.save(); ctx.translate(0,b.built?-6:0);
   if(!b.built){
     ctx.fillStyle="rgba(12,26,34,.9)"; ctx.fillRect(x,y,W,H);
     ctx.strokeStyle=c.b; ctx.lineWidth=2; ctx.setLineDash([6,5]);
@@ -2045,6 +2092,12 @@ function drawBld(b){
     ctx.fillStyle=c.a; ctx.fillRect(0,-2.6,W*.55,5.2); ctx.restore();
     ctx.fillStyle=c.b; ctx.beginPath(); ctx.arc(b.x,b.y,4.4,0,6.284); ctx.fill();
   }
+  if(b.built){
+    // NW rim light on the lifted superstructure
+    ctx.strokeStyle="rgba(140,220,225,.16)"; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(x+3,y+H*.55); ctx.lineTo(x+3,y+4); ctx.lineTo(x+W*.55,y+4); ctx.stroke();
+  }
+  ctx.restore();
   if(selD){ ctx.strokeStyle=c.a; ctx.lineWidth=1.7; ctx.setLineDash([4,4]);
     ctx.strokeRect(x-3.5,y-3.5,W+7,H+7); ctx.setLineDash([]); }
   hpBar(b,W*.8);

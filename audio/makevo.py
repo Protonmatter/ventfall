@@ -13,24 +13,16 @@ If you edit or add any `text:` in index.html, rerun this. Output naming (djb2
 of "who|text") matches voHash() in the game, so unchanged lines are kept and
 only new/edited lines render.
 """
-import asyncio, pathlib, re, sys
+import asyncio, json, pathlib, re, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools" / "voforge"))
 import voforge  # noqa: E402
 
-CAST = {
-    "_default": {"voice": "en-GB-ThomasNeural", "rate": "-6%"},
-    # the Choir's glyphs are typography, not phonetics
-    "_subs":  [["⋮", ","], ["[▸·—…]", ", "]],
-    "voss":   {"voice": "en-US-AriaNeural"},
-    "okafor": {"voice": "en-NG-AbeoNeural"},
-    "krane":  {"voice": "en-GB-RyanNeural",  "rate": "+6%"},
-    "sable":  {"voice": "en-SG-LunaNeural",  "rate": "+4%"},
-    "reyne":  {"voice": "en-AU-NatashaNeural"},
-    "choir":  {"voice": "en-US-GuyNeural",   "rate": "-30%", "pitch": "-35Hz"},
-    "narr":   {"voice": "en-GB-ThomasNeural", "rate": "-6%"},
-}
+# The cast lives in data (audio/vo-cast.json) in voforge's own format, so the
+# same sheet can drive the standalone tool directly:
+#   python tools/voforge/voforge.py --lines <extracted.json> --cast audio/vo-cast.json
+CAST = json.loads((ROOT / "audio" / "vo-cast.json").read_text(encoding="utf-8"))
 
 def extract(src: str):
     # every shot is a literal {who:"x"[, title:"…"], text:"…"}

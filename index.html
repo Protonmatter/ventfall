@@ -742,6 +742,7 @@ function newGame(cfg){
   };
   if(cfg.aiMods){ for(const k in cfg.aiMods) G[k]=cfg.aiMods[k]; }
   buildMap(cfg);
+  rehash();   // scripted setup code may query near() before the first sim frame
   centerOn(playerHub());
   refreshFog();
 }
@@ -787,7 +788,9 @@ function buildMap(cfg){
   // capturable extractor relays
   for(const c of cfg.cps||[])
     G.cps.push({x:fw(c.fx),y:fh(c.fy),r:c.r||70,rate:c.rate||3,owner:-1,prog:0,acc:0,name:c.name||"Extractor Relay"});
-  G.ents.filter(e=>e.type==="drone").forEach(d=>assignNearestNode(d));
+  // tagged drones are scripted actors (crew pods, survey teams) — they hold
+  // position until ordered; only plain workers head for the seams
+  G.ents.filter(e=>e.type==="drone"&&!e.tag).forEach(d=>assignNearestNode(d));
 }
 const bIdx=(tx,ty)=>ty*MAP_W+tx;
 const inMap=(tx,ty)=>tx>=0&&ty>=0&&tx<MAP_W&&ty<MAP_H;
@@ -880,6 +883,9 @@ function spawnBld(type,team,tx,ty,done){
 function killEnt(e,src){
   if(e.dead) return; e.dead=true; G.deadN++;
   if(src&&!friendly(src.team,e.team)) creditKill(src);
+  // mission bookkeeping: evacuation removals bypass killEnt, so this counts
+  // only genuine losses of tagged actors
+  if(G.msn&&e.tag) G.msn.lost[e.tag]=(G.msn.lost[e.tag]||0)+1;
   if(e.kind==="bld"){
     for(let ox=0;ox<e.w;ox++) for(let oy=0;oy<e.h;oy++)
       if(inMap(e.tx+ox,e.ty+oy)) G.blocked[bIdx(e.tx+ox,e.ty+oy)]=0;
@@ -928,7 +934,9 @@ function rehash(){
     let a=hash.get(k); if(!a) hash.set(k,a=[]); a.push(e); }
 }
 function near(x,y,rad,fn){
-  const c0=((x-rad)/CELL)|0, c1=((x+rad)/CELL)|0, r0=((y-rad)/CELL)|0, r1=((y+rad)/CELL)|0;
+  // clamp to the populated world so huge radii don't sweep millions of empty cells
+  const c0=Math.max(0,((x-rad)/CELL)|0), c1=Math.min((WORLD_W/CELL)|0,((x+rad)/CELL)|0);
+  const r0=Math.max(0,((y-rad)/CELL)|0), r1=Math.min((WORLD_H/CELL)|0,((y+rad)/CELL)|0);
   for(let cy=r0;cy<=r1;cy++) for(let cx=c0;cx<=c1;cx++){
     const a=hash.get(cy*HASH_W+cx); if(!a) continue;
     for(const e of a) fn(e);
@@ -1159,8 +1167,9 @@ function tickUnit(u,dt){
     }
   }
 
-  // auto-acquire
-  if(u.acqCd<=0){
+  // auto-acquire — scripted civilian workers (crew pods, survey teams) stay passive
+  const passive=u.team===PLAYER&&u.tag&&d.worker;
+  if(u.acqCd<=0&&!passive){
     u.acqCd=.35;
     if((u.state==="idle"||u.state==="attack"||(u.state==="move"&&u.agro))&&(!u.tgt||u.tgt.dead)){
       const t=findTarget(u,d.acq);
@@ -1248,6 +1257,7 @@ function tickUnit(u,dt){
 function attackTick(u,d){
   const t=u.tgt;                       // hold a local ref: killing t nulls u.tgt mid-call
   if(u.cd>0||!t||t.dead) return;
+  if(friendly(u.team,t.team)){ u.tgt=null; return; }   // no friendly fire, ever
   if(d.minRng&&dist(u,t)<d.minRng) return;   // artillery cannot fire point-blank
   u.cd=d.rate;
   const dmgOut=d.dmg*(1+.1*u.rank);   // veterancy bonus
@@ -1483,7 +1493,7 @@ function initMission(ch){
     objs:(ch.objectives||[]).map(o=>Object.assign({prog:0,done:false,failed:false},o)),
     events:(ch.events||[]).map(()=>({fired:false})),
     zones:(ch.zones||[]).map(z=>({x:fw(z.fx),y:fh(z.fy),r:z.r||90,label:z.label||"",evacTag:z.evacTag||null})),
-    over:false, t:0, evac:0
+    over:false, t:0, evac:0, lost:{}
   };
   if(ch.setup) ch.setup();
 }
@@ -1509,7 +1519,12 @@ function doSpawn(s){
     if(s.hpMul){ e.maxHp=Math.round(e.maxHp*s.hpMul); e.hp=e.maxHp; }
     if(e.kind==="unit"){
       if(s.order==="attackHub"){ const h=playerHub(); orderMove(e,h.x+(rnd()-.5)*90,h.y+(rnd()-.5)*90,true); }
-      else if(s.order==="attackNearest"){ const t=findTarget(e,1e5)||playerHub(); orderAttack(e,t); }
+      else if(s.order==="attackNearest"){
+        const t=findTarget(e,1e5);
+        if(t) orderAttack(e,t);
+        else if(e.team===ENEMY){ const h=playerHub(); orderMove(e,h.x+(rnd()-.5)*90,h.y+(rnd()-.5)*90,true); }
+        else e.agro=true;   // friendly spawns hold and fight what comes — never their own rig
+      }
       else if(s.moveTo) orderMove(e,fw(s.moveTo.fx),fh(s.moveTo.fy),!!s.agro);
     }
     spawned.push(e);
@@ -1524,7 +1539,9 @@ function tickMission(dt){
   (ch.events||[]).forEach((ev,i)=>{
     const st=m.events[i];
     if(st.fired) return;
-    const due=(ev.at!=null&&m.t>=ev.at)||(ev.cond&&ev.cond(m));
+    // every present condition must hold: `at` is a not-before time, `cond` a predicate
+    if(ev.at==null&&!ev.cond) return;
+    const due=(ev.at==null||m.t>=ev.at)&&(!ev.cond||ev.cond(m));
     if(!due) return;
     st.fired=true;
     if(ev.spawn) ev.spawn.forEach(doSpawn);
@@ -1570,6 +1587,10 @@ function tickMission(dt){
       case "own":
         o.prog=G.ents.filter(e=>!e.dead&&e.team===PLAYER&&e.type===o.bt&&e.built).length;
         if(o.prog>=(o.n||1)) o.done=true; break;
+      case "noloss":
+        o.prog=m.lost[o.tag]||0;
+        if(o.prog>(o.n||0)) o.failed=true; else o.done=true;
+        break;
     }
     if(o.failed&&!o.optional) return missionLose(o.text);
     // protect objectives are satisfied by not failing; everything else must complete
@@ -2803,11 +2824,12 @@ CHAPTERS=[
   events:[
     {at:6,  toast:"Okafor: drones on the chimneys, Commander. Ore first, sentiment later."},
     {at:75, shots:[{who:"krane", text:"Voss. Telemetry says you're four points under curve. The Board reads these numbers with their morning coffee. Do not make my coffee interesting."}]},
-    {at:130, alarm:true, toast:"Contact — claim-jumper probe from the north", warn:true,
-      spawn:[{type:"lancer",team:ENEMY,edge:"n",n:3,order:"attackHub"}]},
-    {at:250, alarm:true, toast:"Second probe inbound — they are testing our teeth", warn:true,
+    {at:110, toast:"Okafor: sonar's picking up claim-jumpers sniffing the ridge. A Turret (N) between them and the rig would let me sleep.", warn:true},
+    {at:165, alarm:true, toast:"Contact — claim-jumper probe from the north", warn:true,
+      spawn:[{type:"lancer",team:ENEMY,edge:"n",n:2,order:"attackHub"}]},
+    {at:300, alarm:true, toast:"Second probe inbound — they are testing our teeth", warn:true,
       spawn:[{type:"lancer",team:ENEMY,edge:"n",n:3,order:"attackHub"},
-             {type:"gunner",team:ENEMY,edge:"ne",n:2,order:"attackHub"}]}
+             {type:"gunner",team:ENEMY,edge:"ne",n:1,order:"attackHub"}]}
   ],
   brief:[
     {who:"narr", title:"Meridian Field · 3,214 m", text:"Consortium Charter 7-C: the seabed belongs to whoever can hold a rig on it. Everything else is negotiation."},
@@ -2841,7 +2863,7 @@ CHAPTERS=[
     {at:20, shots:[{who:"reyne", title:"Tantalus Ridge · 2,890 m", text:"Consortium hull on my doorstep. I'm Reyne. This ridge fed my crew for six years before your Charter learned to spell it. Turn around."},
       {who:"voss", text:"I have orders."},
       {who:"reyne", text:"Orders. I had a mortgage once too. When your company's done with you, come find whatever's left of us — we'll compare receipts."}]},
-    {cond:()=>G.ents.some(e=>!e.dead&&e.team===ENEMY&&e.kind==="bld"&&e.hp<e.maxHp*.5),
+    {cond:()=>G.ents.some(e=>!e.dead&&e.team===ENEMY&&e.kind==="bld"&&e.built&&e.hp<e.maxHp*.5),
       shots:[{who:"okafor", text:"Their rig's buckling, Commander. Whoever's inside is getting a very bad afternoon. Just… noting it out loud."}]}
   ],
   brief:[
@@ -2952,7 +2974,7 @@ CHAPTERS=[
   zones:[{fx:.5,fy:.9,r:100,label:"Bathyscaphe Perimeter",evacTag:"pod"}],
   objectives:[
     {type:"evac", n:10, text:"Evacuate 10 crew pods to the bathyscaphe"},
-    {type:"evac", n:12, text:"Leave no one — all 12 pods", optional:true}
+    {type:"noloss", tag:"pod", text:"Lose not a single pod", optional:true}
   ],
   events:[
     {at:5, shots:[{who:"okafor", title:"Meridian Field · collapsing", text:"Twelve pods, one bathyscaphe, and a seabed coming apart under us. Crew pods move like wounded ducks, Commander — they'll need escorts the whole way south."},
@@ -3309,7 +3331,7 @@ function serializeGame(){
     sel:G.sel.filter(e=>!e.dead).map(e=>e.id), groups,
     blocked:u8ToB64(G.blocked), fog:u8ToB64(G.fog), slow:u8ToB64(G.slow),
     msn:G.msn?{
-      ch:G.msn.ch, t:G.msn.t, evac:G.msn.evac,
+      ch:G.msn.ch, t:G.msn.t, evac:G.msn.evac, lost:G.msn.lost||{},
       objs:G.msn.objs.map(o=>({prog:o.prog,done:o.done,failed:o.failed})),
       events:G.msn.events.map(ev=>({fired:ev.fired}))
     }:null
@@ -3352,7 +3374,7 @@ function restoreGame(sv){
     const ch=chapterById(sv.msn.ch);
     if(ch){
       G.msn={
-        ch:sv.msn.ch, t:sv.msn.t, evac:sv.msn.evac, over:false,
+        ch:sv.msn.ch, t:sv.msn.t, evac:sv.msn.evac, lost:sv.msn.lost||{}, over:false,
         objs:(ch.objectives||[]).map((o,i)=>Object.assign({prog:0,done:false,failed:false},o,sv.msn.objs[i]||{})),
         events:(ch.events||[]).map((_,i)=>({fired:!!(sv.msn.events[i]&&sv.msn.events[i].fired)})),
         zones:(ch.zones||[]).map(z=>({x:fw(z.fx),y:fh(z.fy),r:z.r||90,label:z.label||"",evacTag:z.evacTag||null}))

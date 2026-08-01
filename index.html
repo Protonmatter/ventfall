@@ -235,6 +235,22 @@ h1 em{font-style:normal;color:var(--glow)}
   font-size:10px;letter-spacing:.25em;padding:6px 12px;cursor:pointer}
 #cineSkip:hover{color:var(--glow);border-color:var(--glow)}
 
+/* cinematic scenes on phones: smaller portrait beside compact text, choices
+   above the box, everything reachable with a thumb */
+@media (max-width:560px){
+  #cine .bar{height:6vh}
+  #cineTitle{top:8vh;font-size:10px;letter-spacing:.3em;padding:0 40px}
+  #cineBox{bottom:7vh;width:94vw;gap:8px;align-items:flex-end}
+  #cinePortrait{width:64px;height:64px}
+  #cineTextWrap{padding:10px 12px;min-height:84px}
+  #cineName{font-size:10px;margin-bottom:5px}
+  #cineText{font-size:12.5px;line-height:1.55;min-height:40px}
+  #cineChoices{bottom:auto;top:14vh;width:94vw;gap:8px}
+  #cineChoices button{font-size:11px;padding:10px 13px}
+  #cineChoices button small{font-size:9.5px}
+  #cineSkip{top:calc(6vh + 8px);right:10px;font-size:9px;padding:5px 9px}
+}
+
 /* ---------- title & campaign screens ---------- */
 .menuCol{display:flex;flex-direction:column;gap:10px;margin-top:26px}
 .mbtn{font-family:"Oxanium",sans-serif;font-weight:800;font-size:15px;letter-spacing:.2em;
@@ -269,6 +285,24 @@ h1 em{font-style:normal;color:var(--glow)}
 .shopRow button:disabled{opacity:.35;cursor:not-allowed}
 #salvBal{font-family:"Oxanium",sans-serif;font-weight:800;font-size:18px;color:var(--sulfur);
   letter-spacing:.08em;margin-bottom:16px}
+/* campaign menus on phones */
+@media (max-width:560px){
+  .mbtn{font-size:12.5px;padding:12px 16px}
+  .mbtn:hover{padding-left:22px}
+  .chRow{padding:9px 10px;gap:9px}
+  .chRow .num{font-size:15px;width:26px}
+  .chRow .ttl{font-size:11px}
+  .chRow .wld{font-size:9px}
+  .chRow .st{font-size:8px}
+  .shopRow{flex-wrap:wrap;gap:8px;padding:9px 10px}
+  .shopRow .inf{flex:1 1 100%}
+  .shopRow .nm{font-size:11px}
+  .shopRow .ds{font-size:9.5px}
+  .shopRow .pips{margin-left:auto}
+  #objPanel{max-width:62vw;top:46px;left:8px}
+  #objPanel .obj{font-size:9.5px;padding:4px 8px}
+  .pSlot .lb{font-size:9px}
+}
 
 :focus-visible{outline:2px solid var(--glow);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){.toast{animation:none}}

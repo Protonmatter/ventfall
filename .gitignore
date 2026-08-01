@@ -8,3 +8,8 @@ node_modules/
 *.log
 .idea/
 .vscode/
+
+# Python build/editable-install metadata
+*.egg-info/
+__pycache__/
+*.pyc

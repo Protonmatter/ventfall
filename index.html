@@ -162,6 +162,18 @@ h1 em{font-style:normal;color:var(--glow)}
   #deck{grid-template-columns:var(--hud-h) 1fr 190px}
   #selStats{display:none}
 }
+/* short-landscape phones: slim the deck instead of hiding information */
+@media (max-height:480px){
+  :root{--hud-h:110px}
+  #deck{grid-template-columns:var(--hud-h) 1fr 170px}
+  #deck>section{padding:7px}
+  #selTitle{font-size:14px}
+  #selSub{display:none}
+  #sonarWrap::after{display:none}
+  #sonar{width:96px;height:96px}
+  #roster{max-height:34px}
+  .cmd{font-size:8.5px}
+}
 </style>
 </head>
 <body>
@@ -225,6 +237,8 @@ h1 em{font-style:normal;color:var(--glow)}
         <div><kbd>F</kbd> Pause</div>
         <div><kbd>`</kbd> Select army</div>
         <div><kbd>Shift·RClick</kbd> Queue waypoint</div>
+        <div><kbd>Wheel / Pinch</kbd> Zoom</div>
+        <div><kbd>Touch</kbd> Tap select · tap order · hold attack</div>
       </div>
       <div id="diffRow" role="radiogroup" aria-label="Difficulty">
         <button class="diff" data-d="easy">Calm Vent</button>
@@ -1125,6 +1139,7 @@ function resize(){
   // sonar backing store tracks DPR too (was hardcoded 292 = an implicit 2x)
   const sS=Math.round(146*DPR);
   if(sonar.width!==sS){ sonar.width=sS; sonar.height=sS; }
+  setZoom(zoom);   // re-clamp: a bigger viewport can raise the minimum zoom
 }
 function prerenderTerrain(){
   terrainC=document.createElement("canvas");
@@ -1157,17 +1172,35 @@ function prerenderTerrain(){
     m.fillRect(tx,ty,1,1);
   }
 }
-const s2w=(sx,sy)=>({x:sx+G.cam.x,y:sy+G.cam.y});
-function centerOn(e){ G.cam.x=clamp(e.x-VW/2,0,Math.max(0,WORLD_W-VW)); G.cam.y=clamp(e.y-VH/2,0,Math.max(0,WORLD_H-VH)); }
+/* ------------------------------- zoom ------------------------------------ */
+let zoom=1;
+const vw=()=>VW/zoom, vh=()=>VH/zoom;   // viewport size in world units
+function minZoom(){ return Math.max(.65, VW/WORLD_W||0, VH/WORLD_H||0); }
+function setZoom(z,px,py){
+  const mz=minZoom();
+  z=clamp(z,mz,Math.max(1.6,mz));
+  if(!G){ zoom=z; return; }
+  if(px==null){ px=VW/2; py=VH/2; }
+  // keep the world point under the anchor fixed while the scale changes
+  const wx=G.cam.x+px/zoom, wy=G.cam.y+py/zoom;
+  zoom=z;
+  G.cam.x=clamp(wx-px/zoom,0,Math.max(0,WORLD_W-vw()));
+  G.cam.y=clamp(wy-py/zoom,0,Math.max(0,WORLD_H-vh()));
+}
+const s2w=(sx,sy)=>({x:sx/zoom+G.cam.x,y:sy/zoom+G.cam.y});
+function centerOn(e){ G.cam.x=clamp(e.x-vw()/2,0,Math.max(0,WORLD_W-vw())); G.cam.y=clamp(e.y-vh()/2,0,Math.max(0,WORLD_H-vh())); }
 const TEAMC=[{a:"#57E8CC",b:"#1E6F63",d:"#0B2E2A"},{a:"#FF7A45",b:"#8C3A1C",d:"#33150B"}];
 
 function render(){
   const sx=camShake>0?(Math.random()-.5)*camShake:0, sy=camShake>0?(Math.random()-.5)*camShake:0;
-  ctx.save(); ctx.translate(-G.cam.x+sx,-G.cam.y+sy);
-  const L=G.cam.x-40,T=G.cam.y-40,R=G.cam.x+VW+40,B=G.cam.y+VH+40;
+  ctx.save(); ctx.scale(zoom,zoom); ctx.translate(-G.cam.x+sx,-G.cam.y+sy);
+  const L=G.cam.x-40,T=G.cam.y-40,R=G.cam.x+vw()+40,B=G.cam.y+vh()+40;
   const vis=e=>e.x>L&&e.x<R&&e.y>T&&e.y<B;
 
-  ctx.drawImage(terrainC,G.cam.x,G.cam.y,VW+8,VH+8,G.cam.x,G.cam.y,VW+8,VH+8);
+  // source rect clamped to the world so oversized viewports don't sample
+  // outside the terrain canvas
+  const tw=Math.min(WORLD_W-G.cam.x,vw()+8), th=Math.min(WORLD_H-G.cam.y,vh()+8);
+  ctx.drawImage(terrainC,G.cam.x,G.cam.y,tw,th,G.cam.x,G.cam.y,tw,th);
 
   // vent glow
   for(const v of G.vents){
@@ -1439,8 +1472,8 @@ function drawFog(){
   // blit only the camera's tile window — the full-world scale-up was the
   // single largest per-frame fill
   const tx0=Math.max(0,(G.cam.x/TILE)|0), ty0=Math.max(0,(G.cam.y/TILE)|0);
-  const tx1=Math.min(MAP_W,Math.ceil((G.cam.x+VW)/TILE)+1);
-  const ty1=Math.min(MAP_H,Math.ceil((G.cam.y+VH)/TILE)+1);
+  const tx1=Math.min(MAP_W,Math.ceil((G.cam.x+vw())/TILE)+1);
+  const ty1=Math.min(MAP_H,Math.ceil((G.cam.y+vh())/TILE)+1);
   ctx.save(); ctx.imageSmoothingEnabled=true;
   ctx.drawImage(fogC,tx0,ty0,tx1-tx0,ty1-ty0,
                 tx0*TILE,ty0*TILE,(tx1-tx0)*TILE,(ty1-ty0)*TILE);
@@ -1489,7 +1522,7 @@ function drawSonar(dt){
   sx.strokeStyle="rgba(87,232,204,.15)"; sx.lineWidth=1;
   for(let i=1;i<=3;i++){ sx.beginPath(); sx.arc(R,R,R*i/3.2,0,6.284); sx.stroke(); }
   sx.strokeStyle="rgba(207,221,226,.75)"; sx.lineWidth=1.6;
-  sx.strokeRect(G.cam.x/WORLD_W*S,G.cam.y/WORLD_H*S,VW/WORLD_W*S,VH/WORLD_H*S);
+  sx.strokeRect(G.cam.x/WORLD_W*S,G.cam.y/WORLD_H*S,vw()/WORLD_W*S,vh()/WORLD_H*S);
   sx.restore();
 }
 function sonarWorld(ev){
@@ -1498,8 +1531,8 @@ function sonarWorld(ev){
 }
 function sonarTo(ev){
   const w=sonarWorld(ev);
-  G.cam.x=clamp(w.x-VW/2,0,Math.max(0,WORLD_W-VW));
-  G.cam.y=clamp(w.y-VH/2,0,Math.max(0,WORLD_H-VH));
+  G.cam.x=clamp(w.x-vw()/2,0,Math.max(0,WORLD_W-vw()));
+  G.cam.y=clamp(w.y-vh()/2,0,Math.max(0,WORLD_H-vh()));
 }
 sonar.addEventListener("contextmenu",e=>e.preventDefault());
 sonar.addEventListener("pointerdown",e=>{
@@ -1658,18 +1691,39 @@ function updateHUD(){
 /* ------------------------------- input ----------------------------------- */
 const mouse={x:-1,y:-1,inside:false}, drag={on:false,x0:0,y0:0,moved:false};
 const lastClick={t:0,id:0,x:0,y:0};
+// touch state: active touch points, pinch descriptor, long-press timer
+const touches=new Map();
+let pinch=null, lpTimer=null, suppressTap=false;
+function cancelLongPress(){ if(lpTimer){ clearTimeout(lpTimer); lpTimer=null; } }
 let attackMove=false;
 const keys={};
 function arm(t){ G.armed=G.armed===t?null:t; attackMove=false; Audio_.click(); }
 function armAttackMove(){ attackMove=true; G.armed=null; Audio_.click(); }
 
 view.addEventListener("contextmenu",e=>e.preventDefault());
+view.addEventListener("wheel",e=>{
+  if(!G.started) return;
+  e.preventDefault();
+  const r=view.getBoundingClientRect();
+  setZoom(zoom*Math.pow(1.0015,-e.deltaY),e.clientX-r.left,e.clientY-r.top);
+},{passive:false});
 view.addEventListener("pointerdown",e=>{
   if(!G.paused) Audio_.resume();
   if(!G.started||G.over||G.paused) return;
   view.setPointerCapture(e.pointerId);
   const r=view.getBoundingClientRect();
   mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top;
+  if(e.pointerType==="touch"){
+    touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(touches.size===2){
+      // second finger: switch to pan/pinch, abandon any selection gesture
+      cancelLongPress(); drag.on=false; drag.moved=false; suppressTap=true;
+      const [a,b]=[...touches.values()];
+      pinch={d:Math.hypot(a.x-b.x,a.y-b.y),cx:(a.x+b.x)/2,cy:(a.y+b.y)/2};
+      return;
+    }
+    suppressTap=false;
+  }
   if(e.button===2){
     drag.on=false; drag.moved=false;          // right-click mid-drag must not strand the marquee
     const w=s2w(mouse.x,mouse.y);
@@ -1688,19 +1742,57 @@ view.addEventListener("pointerdown",e=>{
     attackMove=false; return;
   }
   drag.on=true; drag.x0=mouse.x; drag.y0=mouse.y; drag.moved=false;
+  // touch long-press = attack-move order at the pressed point
+  if(e.pointerType==="touch"&&G.sel.some(s=>s.kind==="unit"&&s.team===PLAYER)){
+    const px=mouse.x, py=mouse.y;
+    cancelLongPress();
+    lpTimer=setTimeout(()=>{
+      lpTimer=null;
+      if(drag.moved||pinch||G.paused||G.over) return;
+      drag.on=false; suppressTap=true;
+      const w2=s2w(px,py);
+      const units=G.sel.filter(s2=>s2.kind==="unit"&&s2.team===PLAYER&&!s2.dead);
+      if(units.length){ formation(units,w2.x,w2.y,true); fx_ring(w2.x,w2.y,32,"#FF6A34"); Audio_.attackOrder(); }
+    },450);
+  }
 });
 view.addEventListener("pointermove",e=>{
+  if(e.pointerType==="touch"&&touches.has(e.pointerId)){
+    const t0=touches.get(e.pointerId); t0.x=e.clientX; t0.y=e.clientY;
+    if(pinch&&touches.size>=2){
+      const [a,b]=[...touches.values()];
+      const d=Math.hypot(a.x-b.x,a.y-b.y), cx=(a.x+b.x)/2, cy=(a.y+b.y)/2;
+      const r2=view.getBoundingClientRect();
+      if(pinch.d>0) setZoom(zoom*d/pinch.d,cx-r2.left,cy-r2.top);
+      G.cam.x=clamp(G.cam.x-(cx-pinch.cx)/zoom,0,Math.max(0,WORLD_W-vw()));
+      G.cam.y=clamp(G.cam.y-(cy-pinch.cy)/zoom,0,Math.max(0,WORLD_H-vh()));
+      pinch={d,cx,cy};
+      return;
+    }
+  }
   const r=view.getBoundingClientRect();
   mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top; mouse.inside=true;
-  if(drag.on&&Math.hypot(mouse.x-drag.x0,mouse.y-drag.y0)>6) drag.moved=true;
+  if(drag.on&&Math.hypot(mouse.x-drag.x0,mouse.y-drag.y0)>6){ drag.moved=true; cancelLongPress(); }
 });
 view.addEventListener("pointerenter",()=>{ mouse.inside=true; });
 view.addEventListener("pointerleave",()=>{ if(!drag.on) mouse.inside=false; });
-view.addEventListener("pointercancel",()=>{ drag.on=false; drag.moved=false; mouse.inside=false; });
+view.addEventListener("pointercancel",e=>{
+  touches.delete(e.pointerId);
+  if(touches.size<2) pinch=null;
+  cancelLongPress();
+  drag.on=false; drag.moved=false; mouse.inside=false;
+});
 view.addEventListener("pointerup",e=>{
+  if(e.pointerType==="touch"){
+    touches.delete(e.pointerId);
+    if(touches.size<2) pinch=null;
+    cancelLongPress();
+    if(suppressTap){ suppressTap=false; drag.on=false; return; }
+  }
   if(e.button!==0||!drag.on) return;
   drag.on=false;
   const add=e.shiftKey;
+  const prevSel=G.sel;
   if(!add) G.sel=[];
   if(drag.moved){
     const a=s2w(Math.min(drag.x0,mouse.x),Math.min(drag.y0,mouse.y));
@@ -1724,7 +1816,17 @@ view.addEventListener("pointerup",e=>{
       lastClick.t=tN; lastClick.id=hit.e.id; lastClick.x=mouse.x; lastClick.y=mouse.y;
       if(dbl&&hit.e.kind==="unit"){ // double-click: all of type on screen
         G.sel=G.ents.filter(en=>!en.dead&&en.team===PLAYER&&en.type===hit.e.type&&
-          en.x>G.cam.x&&en.x<G.cam.x+VW&&en.y>G.cam.y&&en.y<G.cam.y+VH);
+          en.x>G.cam.x&&en.x<G.cam.x+vw()&&en.y>G.cam.y&&en.y<G.cam.y+vh());
+      }
+    } else if(e.pointerType==="touch"&&!add){
+      // touch has no right button: a tap on open ground with units selected
+      // is the context order (move / attack / mine), same as right-click
+      const units=prevSel.filter(u2=>u2&&!u2.dead&&u2.kind==="unit"&&u2.team===PLAYER);
+      if(units.length){
+        G.sel=prevSel.filter(s2=>!s2.dead);
+        G.armed=null; attackMove=false;
+        issue(w.x,w.y,false);
+        return;
       }
     }
   }
@@ -1818,8 +1920,8 @@ function tickCamera(dt){
     if(mouse.y<M&&mouse.y>=0) dy-=sp;
     if(mouse.y>VH-M&&mouse.y<=VH) dy+=sp;
   }
-  G.cam.x=clamp(G.cam.x+dx,0,Math.max(0,WORLD_W-VW));
-  G.cam.y=clamp(G.cam.y+dy,0,Math.max(0,WORLD_H-VH));
+  G.cam.x=clamp(G.cam.x+dx/zoom,0,Math.max(0,WORLD_W-vw()));
+  G.cam.y=clamp(G.cam.y+dy/zoom,0,Math.max(0,WORLD_H-vh()));
 }
 
 /* ------------------------------- game loop -------------------------------- */

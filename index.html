@@ -79,6 +79,18 @@ body{user-select:none;-webkit-user-select:none;touch-action:none}
 .diff:hover{color:var(--bone)}
 .diff.sel{color:var(--glow);border-color:var(--glow);box-shadow:0 0 14px rgba(87,232,204,.2)}
 
+/* ---------- objectives ---------- */
+#objPanel{position:absolute;top:52px;left:12px;z-index:4;pointer-events:none;
+  display:flex;flex-direction:column;gap:5px;max-width:290px}
+#objPanel .obj{font-size:11px;letter-spacing:.04em;color:var(--bone);
+  background:rgba(7,15,21,.82);border-left:2px solid var(--glow);padding:5px 10px}
+#objPanel .obj.done{color:var(--mute);border-left-color:var(--mute);text-decoration:line-through}
+#objPanel .obj.opt{border-left-style:dashed}
+#objPanel .obj b{color:var(--glow);font-family:"Oxanium",sans-serif;font-size:9px;
+  letter-spacing:.2em;display:block;margin-bottom:1px}
+#objPanel .obj .prg{color:var(--sulfur);font-variant-numeric:tabular-nums}
+#objPanel.hide{display:none}
+
 /* ---------- toasts ---------- */
 #toasts{position:absolute;top:52px;left:50%;transform:translateX(-50%);
   display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none;z-index:6}
@@ -238,6 +250,7 @@ h1 em{font-style:normal;color:var(--glow)}
 
   <div id="pauseBanner" class="hide"><span>PAUSED</span></div>
 
+  <div id="objPanel" class="hide" aria-live="off"></div>
   <div id="toasts" role="status" aria-live="polite"></div>
 
   <div id="deck">
@@ -311,9 +324,15 @@ h1 em{font-style:normal;color:var(--glow)}
    ========================================================================== */
 
 /* ----------------------------- constants -------------------------------- */
-const TILE=32, MAP_W=72, MAP_H=72;
-const WORLD_W=TILE*MAP_W, WORLD_H=TILE*MAP_H;
-const PLAYER=0, ENEMY=1;
+const TILE=32;
+let MAP_W=72, MAP_H=72;                    // per-mission; setMapSize() keeps derived values in step
+let WORLD_W=TILE*MAP_W, WORLD_H=TILE*MAP_H;
+const PLAYER=0, ENEMY=1, ALLY=2;           // ALLY fights alongside the player in some chapters
+function setMapSize(w,h){
+  MAP_W=w; MAP_H=h; WORLD_W=TILE*w; WORLD_H=TILE*h;
+  HASH_W=Math.ceil(WORLD_W/64)+2;
+}
+const friendly=(a,b)=>a===b||(a!==ENEMY&&b!==ENEMY);   // player+ally vs enemy
 
 const DEFS={
   // --- units ---
@@ -345,6 +364,7 @@ const DIFFS={
   hard:  {wave0:8, waveInc:4, waveCap:26, first:70,  aiOre:2}
 };
 let difficulty="normal";
+let CS=null;   // campaign state; null in free play — defined fully in the campaign section
 
 // Upgrades researched at the Deepworks. Each applies globally to that team.
 const UPGRADES={
@@ -511,40 +531,106 @@ const Audio_={
 
 /* ------------------------------- state ---------------------------------- */
 let G;
-function newGame(){
+// The default free-play map, expressed in the same config language missions use.
+function skirmishCfg(){
+  return {
+    w:72,h:72, ridges:28, ventsN:26, brine:4, wrecks:2, corridor:true,
+    bases:{player:{fx:.155,fy:.845,drones:4}, enemy:{fx:.845,fy:.155,drones:4}},
+    fields:[{base:"player",n:7,amt:1400},{base:"enemy",n:7,amt:1400},
+            {fx:.5,fy:.5,n:6,amt:1100},{fx:.22,fy:.24,n:5,amt:900},{fx:.78,fy:.76,n:5,amt:900}],
+    cps:[{fx:.5,fy:.5,rate:3}],
+    ai:"full", startOre:350, enemyOre:350
+  };
+}
+function newGame(cfg){
+  cfg=cfg||skirmishCfg();
+  setMapSize(cfg.w||72,cfg.h||72);
   G={
-    t:0, started:false, over:null, ore:{[PLAYER]:350,[ENEMY]:350},
+    t:0, started:false, over:null, mode:cfg.mode||"skirmish",
+    ore:{[PLAYER]:(cfg.startOre??350)+(CS?CS.meta.oreBoost*60:0),[ENEMY]:cfg.enemyOre??350,[ALLY]:0},
     ents:[], nodes:[], projs:[], fx:[], nextId:1,
     cam:{x:0,y:0}, sel:[], groups:{}, armed:null,
     blocked:new Uint8Array(MAP_W*MAP_H),
     fog:new Uint8Array(MAP_W*MAP_H),       // 0 unseen · 1 explored · 2 visible
+    slow:new Uint8Array(MAP_W*MAP_H),      // brine pools: 1 = movement 60%
+    cps:[], msn:null, cfg,
     fogTimer:0, aiTimer:0, wave:0,
     waveSize:DIFFS[difficulty].wave0, waveInc:DIFFS[difficulty].waveInc,
     waveCap:DIFFS[difficulty].waveCap, firstPush:DIFFS[difficulty].first,
     aiOre:DIFFS[difficulty].aiOre, paused:false, alertCd:0,
-    up:{0:{},1:{}}, research:{0:null,1:null},
+    up:{0:{},1:{},2:{}}, research:{0:null,1:null,2:null},
     stats:{mined:0,built:0,killed:0,lost:0},
     deadN:0,
     vents:[]
   };
-  buildTerrain();
-  seedBases();
+  if(cfg.aiMods){ for(const k in cfg.aiMods) G[k]=cfg.aiMods[k]; }
+  buildMap(cfg);
   centerOn(playerHub());
   refreshFog();
+}
+const fw=f=>f*WORLD_W, fh=f=>f*WORLD_H;   // fractional world coords in configs
+function buildMap(cfg){
+  const basePts={};
+  for(const key of ["player","enemy","ally"]){
+    const b=cfg.bases&&cfg.bases[key];
+    if(b) basePts[key]={x:fw(b.fx),y:fh(b.fy)};
+  }
+  buildTerrain(cfg,basePts);
+  // ore fields
+  for(const f of cfg.fields||[]){
+    const c=f.base?basePts[f.base]:{x:fw(f.fx),y:fh(f.fy)};
+    oreField(c.x,c.y,f.n,f.amt);
+  }
+  // salvage wrecks: one-time rich piles amid the silt
+  for(let i=0;i<(cfg.wrecks||0);i++){
+    for(let k=0;k<40;k++){
+      const tx=rint(4,MAP_W-5), ty=rint(4,MAP_H-5);
+      if(G.blocked[bIdx(tx,ty)]) continue;
+      const n=addNode(tx*TILE+16,ty*TILE+16,160+rint(0,80));
+      n.wreck=true; break;
+    }
+  }
+  // bases + starting forces
+  const teamOf={player:PLAYER,enemy:ENEMY,ally:ALLY};
+  for(const key in basePts){
+    const b=cfg.bases[key], p=basePts[key], team=teamOf[key];
+    if(b.hub!==false) spawnBld("hub",team,Math.floor(p.x/TILE)-1,Math.floor(p.y/TILE)-1,true);
+    for(let i=0;i<(b.drones||0);i++)
+      spawnUnit("drone",team,p.x+Math.cos(i*1.6)*62,p.y+Math.sin(i*1.6)*62);
+    for(const u of b.units||[])
+      for(let i=0;i<(u.n||1);i++){
+        const e=spawnUnit(u.type,team,p.x+u.dx+(rnd()-.5)*40,p.y+u.dy+(rnd()-.5)*40);
+        if(u.tag) e.tag=u.tag;
+      }
+    for(const s of b.blds||[]){
+      const e=spawnBld(s.type,team,Math.floor((p.x+s.dx)/TILE),Math.floor((p.y+s.dy)/TILE),true);
+      if(s.tag) e.tag=s.tag;
+    }
+  }
+  // capturable extractor relays
+  for(const c of cfg.cps||[])
+    G.cps.push({x:fw(c.fx),y:fh(c.fy),r:c.r||70,rate:c.rate||3,owner:-1,prog:0,acc:0,name:c.name||"Extractor Relay"});
+  G.ents.filter(e=>e.type==="drone").forEach(d=>assignNearestNode(d));
 }
 const bIdx=(tx,ty)=>ty*MAP_W+tx;
 const inMap=(tx,ty)=>tx>=0&&ty>=0&&tx<MAP_W&&ty<MAP_H;
 
 /* --------------------------- terrain + setup ---------------------------- */
-function buildTerrain(){
-  // scattered rock ridges, kept clear of the two base corners and the mid corridor
+function buildTerrain(cfg,basePts){
+  const pts=Object.values(basePts);
   const safe=(tx,ty)=>{
-    const near=(cx,cy)=>Math.hypot(tx-cx,ty-cy)<13;
-    if(near(11,MAP_H-12)||near(MAP_W-12,11)) return true;
-    // keep the lane between the two bases open: they sit on tx+ty ≈ 71
-    return Math.abs((tx+ty)-(11+(MAP_H-12)))<6;
+    for(const p of pts) if(Math.hypot(tx-p.x/TILE,ty-p.y/TILE)<13) return true;
+    if(cfg.corridor&&basePts.player&&basePts.enemy){
+      // keep a lane open between the two main bases
+      const a=basePts.player, b=basePts.enemy;
+      const ax=a.x/TILE,ay=a.y/TILE,bx=b.x/TILE,by=b.y/TILE;
+      const L=Math.hypot(bx-ax,by-ay)||1;
+      const t=clamp(((tx-ax)*(bx-ax)+(ty-ay)*(by-ay))/(L*L),0,1);
+      if(Math.hypot(tx-(ax+(bx-ax)*t),ty-(ay+(by-ay)*t))<4.2) return true;
+    }
+    return false;
   };
-  for(let i=0;i<28;i++){
+  for(let i=0;i<(cfg.ridges??28);i++){
     let tx=rint(3,MAP_W-4), ty=rint(3,MAP_H-4);
     const len=rint(7,26);
     for(let s=0;s<len;s++){
@@ -556,15 +642,31 @@ function buildTerrain(){
       tx=clamp(tx+rint(-1,1),1,MAP_W-2); ty=clamp(ty+rint(-1,1),1,MAP_H-2);
     }
   }
+  // brine pools — glossy hypersaline basins that slow anything wading through
+  for(let i=0;i<(cfg.brine??0);i++){
+    let tx=rint(5,MAP_W-6), ty=rint(5,MAP_H-6);
+    const len=rint(10,22);
+    for(let s=0;s<len;s++){
+      for(let ox=-1;ox<=1;ox++) for(let oy=-1;oy<=1;oy++){
+        const x=tx+ox,y=ty+oy;
+        if(inMap(x,y)&&!G.blocked[bIdx(x,y)]&&!safe(x,y)) G.slow[bIdx(x,y)]=1;
+      }
+      tx=clamp(tx+rint(-1,1),2,MAP_W-3); ty=clamp(ty+rint(-1,1),2,MAP_H-3);
+    }
+  }
   // map border (loops split per axis so non-square maps stay walled)
   for(let i=0;i<MAP_W;i++){ G.blocked[bIdx(i,0)]=1; G.blocked[bIdx(i,MAP_H-1)]=1; }
   for(let i=0;i<MAP_H;i++){ G.blocked[bIdx(0,i)]=1; G.blocked[bIdx(MAP_W-1,i)]=1; }
-  for(let i=0;i<26;i++){
+  for(let i=0;i<(cfg.ventsN??26);i++){
     const tx=rint(2,MAP_W-3), ty=rint(2,MAP_H-3);
     if(!G.blocked[bIdx(tx,ty)]) G.vents.push({x:tx*TILE+16,y:ty*TILE+16,ph:rnd()*6.28,s:.5+rnd()*.9});
   }
 }
-function addNode(x,y,amt){ G.nodes.push({id:G.nextId++,x,y,amt,max:amt}); }
+function slowAt(x,y){
+  const tx=(x/TILE)|0, ty=(y/TILE)|0;
+  return inMap(tx,ty)&&G.slow[bIdx(tx,ty)]===1;
+}
+function addNode(x,y,amt){ const n={id:G.nextId++,x,y,amt,max:amt,wreck:false}; G.nodes.push(n); return n; }
 function oreField(cx,cy,n,amt){
   for(let i=0;i<n;i++){
     const a=(i/n)*Math.PI*2+rnd()*.5, rr=76+rnd()*46;
@@ -573,21 +675,6 @@ function oreField(cx,cy,n,amt){
     addNode(x,y,amt);
   }
 }
-function seedBases(){
-  const pb={x:11*TILE+16,y:(MAP_H-12)*TILE+16}, eb={x:(MAP_W-12)*TILE+16,y:11*TILE+16};
-  spawnBld("hub",PLAYER,Math.floor(pb.x/TILE)-1,Math.floor(pb.y/TILE)-1,true);
-  spawnBld("hub",ENEMY ,Math.floor(eb.x/TILE)-1,Math.floor(eb.y/TILE)-1,true);
-  oreField(pb.x,pb.y,7,1400); oreField(eb.x,eb.y,7,1400);
-  // contested middle fields
-  oreField(WORLD_W*.5,WORLD_H*.5,6,1100);
-  oreField(WORLD_W*.22,WORLD_H*.24,5,900);
-  oreField(WORLD_W*.78,WORLD_H*.76,5,900);
-  for(let i=0;i<4;i++){
-    spawnUnit("drone",PLAYER,pb.x+Math.cos(i*1.6)*62,pb.y+Math.sin(i*1.6)*62);
-    spawnUnit("drone",ENEMY ,eb.x+Math.cos(i*1.6)*62,eb.y+Math.sin(i*1.6)*62);
-  }
-  G.ents.filter(e=>e.type==="drone").forEach(d=>assignNearestNode(d));
-}
 
 /* ------------------------------ entities -------------------------------- */
 function spawnUnit(type,team,x,y){
@@ -595,7 +682,7 @@ function spawnUnit(type,team,x,y){
   const mh=uHp(team,d);
   const e={id:G.nextId++,kind:"unit",type,team,x,y,vx:0,vy:0,hp:mh,maxHp:mh,r:d.r,
     state:"idle",tx:0,ty:0,tgt:null,node:null,site:null,cd:rnd()*.5,carry:0,face:0,
-    acqCd:0,agro:false,dead:false,path:[]};
+    acqCd:0,agro:false,dead:false,path:[],tag:null,kills:0,rank:0};
   G.ents.push(e); return e;
 }
 function spawnBld(type,team,tx,ty,done){
@@ -603,7 +690,7 @@ function spawnBld(type,team,tx,ty,done){
   const e={id:G.nextId++,kind:"bld",type,team,tx,ty,w:d.w,h:d.h,
     x:tx*TILE+d.w*TILE/2, y:ty*TILE+d.h*TILE/2, r:Math.max(d.w,d.h)*TILE*.45,
     maxHp:d.hp, hp:done?d.hp:Math.round(d.hp*.12), built:!!done, prog:done?d.work||0:0,
-    work:d.work||0, queue:[], qTime:0, rally:null, cd:0, face:0, dead:false, workers:0};
+    work:d.work||0, queue:[], qTime:0, rally:null, cd:0, face:0, dead:false, workers:0, tag:null};
   for(let ox=0;ox<d.w;ox++) for(let oy=0;oy<d.h;oy++)
     if(inMap(tx+ox,ty+oy)) G.blocked[bIdx(tx+ox,ty+oy)]=2;
   G.ents.push(e); return e;
@@ -615,7 +702,7 @@ function killEnt(e){
       if(inMap(e.tx+ox,e.ty+oy)) G.blocked[bIdx(e.tx+ox,e.ty+oy)]=0;
     boom(e.x,e.y,e.r*1.5,true);
   } else boom(e.x,e.y,e.r*1.4,false);
-  if(e.team===PLAYER) G.stats.lost++; else G.stats.killed++;
+  if(e.team===PLAYER) G.stats.lost++; else if(e.team===ENEMY) G.stats.killed++;
   if(e.team===PLAYER&&e.kind==="bld") Audio_.alertLost();
   G.ents.forEach(o=>{ if(o.tgt===e) o.tgt=null; if(o.site===e) {o.site=null;o.state="idle";} });
   G.sel=G.sel.filter(s=>s!==e);
@@ -650,7 +737,7 @@ function capOf(team){
 /* -------------------------- spatial hash (perf) ------------------------- */
 // integer keys + pooled cell arrays: the old string keys allocated one
 // template string per entity per frame and a fresh Map besides
-const CELL=64, HASH_W=Math.ceil(WORLD_W/CELL)+2, hash=new Map();
+const CELL=64; let HASH_W=Math.ceil(WORLD_W/CELL)+2; const hash=new Map();
 function rehash(){
   for(const a of hash.values()) a.length=0;
   for(const e of G.ents){ if(e.dead) continue;
@@ -692,7 +779,7 @@ function issue(x,y,shift){
   if(blds.length&&!units.length){ fx_ring(x,y,26,"#57E8CC"); Audio_.order(); return; }
   if(!units.length) return;
 
-  if(t&&t.kind==="ent"&&t.e.team!==PLAYER){
+  if(t&&t.kind==="ent"&&t.e.team===ENEMY){
     units.forEach(u=>orderAttack(u,t.e)); Audio_.attackOrder(); fx_ring(x,y,30,"#FF6A34");
   } else if(t&&t.kind==="node"){
     let any=false;
@@ -817,7 +904,7 @@ function tickBld(b,dt){
 }
 function findTarget(e,rad){
   let best=null,bd=rad*rad;
-  near(e.x,e.y,rad+40,o=>{ if(o.dead||o.team===e.team) return;
+  near(e.x,e.y,rad+40,o=>{ if(o.dead||friendly(o.team,e.team)) return;
     const d=dist2(e,o); if(d<bd){bd=d;best=o;} });
   return best;
 }
@@ -845,7 +932,8 @@ function damage(e,dmg,team){
 /* ------------------------------ unit tick -------------------------------- */
 function tickUnit(u,dt){
   const d=DEFS[u.type];
-  const eSpd=uSpd(u.team,d), eRng=uRng(u.team,d);   // hoisted: hot path
+  const eRng=uRng(u.team,d);   // hoisted: hot path
+  const eSpd=uSpd(u.team,d)*(slowAt(u.x,u.y)?.6:1);   // brine wading penalty
   u.cd-=dt; u.acqCd-=dt;
 
   // Tender: repair the most wounded friendly in range
@@ -853,7 +941,7 @@ function tickUnit(u,dt){
     if(u.cd<=0){
       let best=null,bw=1;
       near(u.x,u.y,d.healRng+40,o=>{
-        if(o.dead||o.team!==u.team||o.kind!=="unit"||o===u) return;
+        if(o.dead||!friendly(o.team,u.team)||o.kind!=="unit"||o===u) return;
         const f=o.hp/o.maxHp;
         if(f<bw&&f<1&&dist(u,o)<=d.healRng){ bw=f; best=o; }
       });
@@ -1011,7 +1099,7 @@ function tickProjs(dt){
     if(p.life>=p.dur){
       if(p.splash){
         near(p.tx,p.ty,p.splash+30,o=>{
-          if(o.dead||o.team===p.team) return;
+          if(o.dead||friendly(o.team,p.team)) return;
           const dd=Math.hypot(o.x-p.tx,o.y-p.ty);
           if(dd<=p.splash+o.r) damage(o,p.dmg*(1-.55*(dd/(p.splash+o.r))),p.team);
         });
@@ -1046,7 +1134,7 @@ function refreshFog(){
   fogDirty=true;
   for(let i=0;i<G.fog.length;i++) if(G.fog[i]===2) G.fog[i]=1;
   for(const e of G.ents){
-    if(e.dead||e.team!==PLAYER) continue;
+    if(e.dead||e.team===ENEMY) continue;   // allies grant vision too
     const rad=e.kind==="bld"?(e.type==="turret"?7:9):(e.type==="gunner"?7:6);
     const cx=(e.x/TILE)|0, cy=(e.y/TILE)|0;
     for(let ox=-rad;ox<=rad;ox++) for(let oy=-rad;oy<=rad;oy++){
@@ -1105,6 +1193,13 @@ function tickAI(dt){
     if(pick) tryResearch(works[0],pick);
   }
 
+  // contest extractor relays with a small detachment
+  if(G.cps.length&&army.length>=4){
+    const want=G.cps.find(c=>c.owner!==ENEMY);
+    if(want&&!army.some(u=>u.cpDuty&&!u.dead)){
+      army.slice(0,2).forEach(u=>{ u.cpDuty=true; orderMove(u,want.x+(rnd()-.5)*40,want.y+(rnd()-.5)*40,true); });
+    }
+  }
   if(army.length>=G.waveSize && G.t>=G.firstPush){
     const targets=alive(PLAYER).filter(e=>e.kind==="bld");
     const tgt=targets.length?targets.reduce((a,b)=>dist2(hub,a)<dist2(hub,b)?a:b):null;
@@ -1127,6 +1222,151 @@ function aiBuild(type,hub){
     workers.forEach(w=>{ w.site=b; w.state="tobuild"; w.node=null; });
     return;
   }
+}
+
+/* ---- campaign shims (replaced by the full campaign systems below) ------- */
+let Scene={active:false, play(shots,onDone){ if(onDone) onDone(); }};
+let CHAPTERS=[];
+function campaignMissionWon(){ endGame(true); }
+function campaignMissionLost(){ endGame(false); }
+
+/* --------------------------- control points ------------------------------ */
+function tickCPs(dt){
+  for(const c of G.cps){
+    let pFriend=false, pEnemy=false;
+    near(c.x,c.y,c.r+20,e=>{
+      if(e.dead||e.kind!=="unit") return;
+      if(dist2(e,c)>c.r*c.r) return;
+      if(e.team===ENEMY) pEnemy=true; else pFriend=true;
+    });
+    const dir=pFriend&&!pEnemy?1:pEnemy&&!pFriend?-1:0;
+    if(dir!==0){
+      c.prog=clamp(c.prog+dir*dt/6,-1,1);
+      const want=c.prog>=1?PLAYER:c.prog<=-1?ENEMY:c.owner;
+      if(want!==c.owner){
+        c.owner=want;
+        if(c.owner===PLAYER){ toast(c.name+" secured"); Audio_.complete(); }
+        else { toast(c.name+" lost to the enemy",1); Audio_.alarm(); }
+      }
+    }
+    if(c.owner>=0){
+      c.acc+=dt*c.rate;
+      const whole=Math.floor(c.acc);
+      if(whole>0){
+        c.acc-=whole;
+        G.ore[c.owner]+=whole;
+        if(c.owner===PLAYER) G.stats.mined+=whole;
+      }
+    }
+  }
+}
+
+/* ---------------------------- mission engine ------------------------------ */
+// Objectives, timed/conditional events, scripted spawns and zones. All closures
+// live in CHAPTERS (static code); saves persist only indices and progress.
+function initMission(ch){
+  G.msn={
+    ch:ch.id,
+    objs:(ch.objectives||[]).map(o=>Object.assign({prog:0,done:false,failed:false},o)),
+    events:(ch.events||[]).map(()=>({fired:false})),
+    zones:(ch.zones||[]).map(z=>({x:fw(z.fx),y:fh(z.fy),r:z.r||90,label:z.label||"",evacTag:z.evacTag||null})),
+    over:false, t:0, evac:0
+  };
+  if(ch.setup) ch.setup();
+}
+function chapterById(id){ return CHAPTERS.find(c=>c.id===id); }
+function spawnPoint(s){
+  if(s.at) return {x:fw(s.at.fx),y:fh(s.at.fy)};
+  const m=60;
+  switch(s.edge){
+    case "n": return {x:m+rnd()*(WORLD_W-2*m), y:m};
+    case "s": return {x:m+rnd()*(WORLD_W-2*m), y:WORLD_H-m};
+    case "w": return {x:m, y:m+rnd()*(WORLD_H-2*m)};
+    default : return {x:WORLD_W-m, y:m+rnd()*(WORLD_H-2*m)};
+  }
+}
+function doSpawn(s){
+  const spawned=[];
+  for(let i=0;i<(s.n||1);i++){
+    const p=spawnPoint(s);
+    let e;
+    if(s.bld) e=spawnBld(s.type,s.team,Math.floor(p.x/TILE),Math.floor(p.y/TILE),true);
+    else e=spawnUnit(s.type,s.team,p.x+(rnd()-.5)*50,p.y+(rnd()-.5)*50);
+    if(s.tag) e.tag=s.tag;
+    if(s.hpMul){ e.maxHp=Math.round(e.maxHp*s.hpMul); e.hp=e.maxHp; }
+    if(e.kind==="unit"){
+      if(s.order==="attackHub"){ const h=playerHub(); orderMove(e,h.x+(rnd()-.5)*90,h.y+(rnd()-.5)*90,true); }
+      else if(s.order==="attackNearest"){ const t=findTarget(e,1e5)||playerHub(); orderAttack(e,t); }
+      else if(s.moveTo) orderMove(e,fw(s.moveTo.fx),fh(s.moveTo.fy),!!s.agro);
+    }
+    spawned.push(e);
+  }
+  return spawned;
+}
+function tickMission(dt){
+  const m=G.msn; if(!m||m.over) return;
+  const ch=chapterById(m.ch); if(!ch) return;
+  m.t+=dt;
+  // events
+  (ch.events||[]).forEach((ev,i)=>{
+    const st=m.events[i];
+    if(st.fired) return;
+    const due=(ev.at!=null&&m.t>=ev.at)||(ev.cond&&ev.cond(m));
+    if(!due) return;
+    st.fired=true;
+    if(ev.spawn) ev.spawn.forEach(doSpawn);
+    if(ev.toast) toast(ev.toast,ev.warn?1:0);
+    if(ev.alarm) Audio_.alarm();
+    if(ev.run) ev.run(m);
+    if(ev.shots) Scene.play(ev.shots);
+  });
+  // evacuation zones swallow friendly units that reach them
+  for(const z of m.zones){
+    if(!z.evacTag) continue;
+    for(const e of G.ents){
+      if(e.dead||e.team!==PLAYER||e.kind!=="unit") continue;
+      if(z.evacTag!=="any"&&e.tag!==z.evacTag) continue;
+      if(dist2(e,z)<z.r*z.r){
+        e.dead=true; G.deadN++; m.evac++;
+        fx_ring(z.x,z.y,40,"#57E8CC"); fx_text(z.x,z.y-20,"ABOARD","#57E8CC"); Audio_.deposit();
+      }
+    }
+  }
+  // objectives
+  let allDone=true;
+  for(const o of m.objs){
+    if(!o.done&&!o.failed) switch(o.type){
+      case "ore": o.prog=G.stats.mined; if(o.prog>=o.amt) o.done=true; break;
+      case "destroyAll": o.done=!G.ents.some(e=>!e.dead&&e.team===ENEMY&&e.kind==="bld"); break;
+      case "destroyTag": o.done=!G.ents.some(e=>!e.dead&&e.tag===o.tag); break;
+      case "survive": o.prog=m.t; if(m.t>=o.dur) o.done=true; break;
+      case "holdCP":{
+        const held=G.cps.filter(c=>c.owner===PLAYER).length;
+        if(held>=o.n) o.prog+=dt;
+        if(o.prog>=o.dur) o.done=true; break; }
+      case "capture": o.done=G.cps.length>0&&G.cps.every(c=>c.owner===PLAYER); break;
+      case "evac": o.prog=m.evac; if(m.evac>=o.n) o.done=true; break;
+      case "reach":{
+        const z=m.zones[o.zone||0];
+        if(z&&G.ents.some(e=>!e.dead&&e.team===PLAYER&&e.kind==="unit"&&
+           (!o.tag||e.tag===o.tag)&&dist2(e,z)<z.r*z.r)) o.done=true; break; }
+      case "protect":
+        if(!G.ents.some(e=>!e.dead&&e.tag===o.tag)) o.failed=true; break;
+    }
+    if(o.failed&&!o.optional) return missionLose(o.text);
+    if(!o.done&&!o.optional) allDone=false;
+  }
+  if(allDone&&m.objs.length) return missionWin();
+  // a commander with nothing left has lost regardless of objectives
+  if(!G.ents.some(e=>!e.dead&&e.team===PLAYER)) missionLose("All forces lost");
+}
+function missionWin(){
+  const m=G.msn; if(m.over) return; m.over=true;
+  campaignMissionWon();
+}
+function missionLose(why){
+  const m=G.msn; if(m.over) return; m.over=true;
+  campaignMissionLost(why);
 }
 
 /* ------------------------------ placement -------------------------------- */
@@ -1184,34 +1424,106 @@ function resize(){
   if(sonar.width!==sS){ sonar.width=sS; sonar.height=sS; }
   setZoom(zoom);   // re-clamp: a bigger viewport can raise the minimum zoom
 }
+// deterministic value noise for terrain texturing (seeded off the map, not rnd())
+function vnoise(x,y,s){
+  const h=(ix,iy)=>{
+    let n=(ix*374761393+iy*668265263+s*1442695041)|0;
+    n=Math.imul(n^(n>>>13),1274126177);
+    return ((n^(n>>>16))>>>0)/4294967295;
+  };
+  const ix=Math.floor(x), iy=Math.floor(y), fx=x-ix, fy=y-iy;
+  const a=h(ix,iy), b=h(ix+1,iy), c=h(ix,iy+1), d=h(ix+1,iy+1);
+  const u=fx*fx*(3-2*fx), v=fy*fy*(3-2*fy);
+  return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v;
+}
 function prerenderTerrain(){
   terrainC=document.createElement("canvas");
   terrainC.width=WORLD_W; terrainC.height=WORLD_H;
   const c=terrainC.getContext("2d");
+  const rockAt=(tx,ty)=>inMap(tx,ty)&&G.blocked[bIdx(tx,ty)]===1;
+  // --- textured seafloor: three sediment strata blended by two noise octaves ---
   c.fillStyle="#0E1D24"; c.fillRect(0,0,WORLD_W,WORLD_H);
+  const CELLPX=8;
+  for(let y=0;y<WORLD_H;y+=CELLPX) for(let x=0;x<WORLD_W;x+=CELLPX){
+    const n=vnoise(x/210,y/210,7)*.65+vnoise(x/52,y/52,13)*.35;
+    if(n<.38)      c.fillStyle=`rgba(7,15,20,${.28+(0.38-n)})`;        // basalt shadow silt
+    else if(n>.66) c.fillStyle=`rgba(36,74,84,${.12+(n-.66)*.8})`;     // pale ash drift
+    else continue;
+    c.fillRect(x,y,CELLPX,CELLPX);
+  }
   // silt grain
   for(let i=0;i<26000;i++){
     const x=rnd()*WORLD_W, y=rnd()*WORLD_H, a=.02+rnd()*.05;
     c.fillStyle=rnd()<.5?`rgba(30,64,74,${a})`:`rgba(6,14,20,${a*1.6})`;
     c.fillRect(x,y,1+rnd()*3,1+rnd()*3);
   }
-  // rock
+  // --- brine pools: glossy hypersaline basins ---
   for(let ty=0;ty<MAP_H;ty++) for(let tx=0;tx<MAP_W;tx++){
-    if(G.blocked[bIdx(tx,ty)]!==1) continue;
+    if(G.slow[bIdx(tx,ty)]!==1) continue;
     const x=tx*TILE,y=ty*TILE;
-    c.fillStyle="#1B2E37"; c.fillRect(x,y,TILE,TILE);
-    c.fillStyle="#24404B";
+    c.fillStyle="rgba(4,16,22,.88)"; c.fillRect(x,y,TILE,TILE);
+    c.fillStyle="rgba(60,150,160,.07)"; c.fillRect(x+3,y+3,TILE-6,TILE-10);
+  }
+  // brine rims + surface sheen
+  for(let ty=0;ty<MAP_H;ty++) for(let tx=0;tx<MAP_W;tx++){
+    if(G.slow[bIdx(tx,ty)]!==1) continue;
+    const x=tx*TILE,y=ty*TILE;
+    c.strokeStyle="rgba(140,220,224,.14)"; c.lineWidth=2;
+    const brAt=(a,b)=>inMap(a,b)&&G.slow[bIdx(a,b)]===1;
     c.beginPath();
-    c.moveTo(x+3+rnd()*5,y+2+rnd()*4); c.lineTo(x+TILE-2-rnd()*6,y+4+rnd()*4);
-    c.lineTo(x+TILE-4-rnd()*4,y+TILE-3-rnd()*5); c.lineTo(x+2+rnd()*5,y+TILE-4-rnd()*4);
-    c.closePath(); c.fill();
-    c.fillStyle="rgba(4,9,14,.5)"; c.fillRect(x,y+TILE-4,TILE,4);
+    if(!brAt(tx,ty-1)){ c.moveTo(x,y+1); c.lineTo(x+TILE,y+1); }
+    if(!brAt(tx-1,ty)){ c.moveTo(x+1,y); c.lineTo(x+1,y+TILE); }
+    c.stroke();
+    if(vnoise(tx*.7,ty*.7,29)>.72){
+      c.fillStyle="rgba(160,230,235,.10)";
+      c.beginPath(); c.ellipse(x+16,y+14,9,3.5,-.4,0,6.284); c.fill();
+    }
+  }
+  // --- extruded rock: cast shadow, south side-face, lit top plateau ---
+  const LIFT=9;
+  // pass 1: soft cast shadows (light from the north-west)
+  for(let ty=0;ty<MAP_H;ty++) for(let tx=0;tx<MAP_W;tx++){
+    if(!rockAt(tx,ty)) continue;
+    c.fillStyle="rgba(2,6,10,.34)";
+    c.fillRect(tx*TILE+5,ty*TILE-LIFT+7,TILE,TILE+2);
+  }
+  // pass 2: faces, north-to-south so lower plateaus overlap correctly
+  for(let ty=0;ty<MAP_H;ty++) for(let tx=0;tx<MAP_W;tx++){
+    if(!rockAt(tx,ty)) continue;
+    const x=tx*TILE, y=ty*TILE;
+    // south wall (visible height) where the tile below is open
+    if(!rockAt(tx,ty+1)){
+      c.fillStyle="#101E27"; c.fillRect(x,y+TILE-LIFT,TILE,LIFT+2);
+      c.fillStyle="rgba(6,12,17,.8)"; c.fillRect(x,y+TILE-3,TILE,3);
+    }
+    // top plateau, lifted
+    const n=vnoise(tx*.5,ty*.5,3);
+    const top=n>.6?"#2A4854":n<.35?"#1B2E37":"#223D48";
+    c.fillStyle=top; c.fillRect(x,y-LIFT,TILE,TILE);
+    // strata detail on the plateau
+    c.fillStyle="#2E515E"; c.globalAlpha=.5+.3*n;
+    c.beginPath();
+    c.moveTo(x+3+rnd()*5,y-LIFT+2+rnd()*4); c.lineTo(x+TILE-2-rnd()*6,y-LIFT+4+rnd()*4);
+    c.lineTo(x+TILE-4-rnd()*4,y-LIFT+TILE-3-rnd()*5); c.lineTo(x+2+rnd()*5,y-LIFT+TILE-4-rnd()*4);
+    c.closePath(); c.fill(); c.globalAlpha=1;
+    // NW rim light where exposed to the light direction
+    c.strokeStyle="rgba(120,200,205,.20)"; c.lineWidth=1.5;
+    c.beginPath();
+    if(!rockAt(tx,ty-1)){ c.moveTo(x+1,y-LIFT+1); c.lineTo(x+TILE-1,y-LIFT+1); }
+    if(!rockAt(tx-1,ty)){ c.moveTo(x+1,y-LIFT+1); c.lineTo(x+1,y-LIFT+TILE-1); }
+    c.stroke();
+  }
+  // vent scorch rings
+  for(const v of G.vents){
+    const g=c.createRadialGradient(v.x,v.y,2,v.x,v.y,22);
+    g.addColorStop(0,"rgba(70,40,26,.55)"); g.addColorStop(1,"rgba(70,40,26,0)");
+    c.fillStyle=g; c.beginPath(); c.arc(v.x,v.y,22,0,6.284); c.fill();
   }
   // minimap base image
   miniC=document.createElement("canvas"); miniC.width=MAP_W; miniC.height=MAP_H;
   const m=miniC.getContext("2d");
   for(let ty=0;ty<MAP_H;ty++) for(let tx=0;tx<MAP_W;tx++){
-    m.fillStyle=G.blocked[bIdx(tx,ty)]===1?"#1E3742":"#0C1A21";
+    m.fillStyle=G.blocked[bIdx(tx,ty)]===1?"#1E3742":G.slow[bIdx(tx,ty)]===1?"#0A2830":"#0C1A21";
     m.fillRect(tx,ty,1,1);
   }
 }
@@ -1232,7 +1544,8 @@ function setZoom(z,px,py){
 }
 const s2w=(sx,sy)=>({x:sx/zoom+G.cam.x,y:sy/zoom+G.cam.y});
 function centerOn(e){ G.cam.x=clamp(e.x-vw()/2,0,Math.max(0,WORLD_W-vw())); G.cam.y=clamp(e.y-vh()/2,0,Math.max(0,WORLD_H-vh())); }
-const TEAMC=[{a:"#57E8CC",b:"#1E6F63",d:"#0B2E2A"},{a:"#FF7A45",b:"#8C3A1C",d:"#33150B"}];
+const TEAMC=[{a:"#57E8CC",b:"#1E6F63",d:"#0B2E2A"},{a:"#FF7A45",b:"#8C3A1C",d:"#33150B"},
+             {a:"#C77DFF",b:"#5E3A8C",d:"#241238"}];   // ally: Reyne violet
 
 function render(){
   const sx=camShake>0?(Math.random()-.5)*camShake:0, sy=camShake>0?(Math.random()-.5)*camShake:0;
@@ -1254,9 +1567,55 @@ function render(){
     ctx.fillStyle=g; ctx.beginPath(); ctx.arc(v.x,v.y,rr,0,6.284); ctx.fill();
   }
 
-  // ore chimneys
+  // capturable extractor relays + mission zones (under entities)
+  for(const c of G.cps){
+    if(c.x<L||c.x>R||c.y<T||c.y>B||!seenAt(c.x,c.y)) continue;
+    const col=c.owner===PLAYER?"#57E8CC":c.owner===ENEMY?"#FF6A34":"#8FA6AE";
+    ctx.strokeStyle=col; ctx.globalAlpha=.5; ctx.lineWidth=1.6; ctx.setLineDash([6,8]);
+    ctx.beginPath(); ctx.arc(c.x,c.y,c.r,0,6.284); ctx.stroke(); ctx.setLineDash([]);
+    // derrick pylon
+    ctx.globalAlpha=1;
+    ctx.fillStyle="#101E26"; ctx.fillRect(c.x-10,c.y-10,20,20);
+    ctx.strokeStyle=col; ctx.lineWidth=2; ctx.strokeRect(c.x-10,c.y-10,20,20);
+    ctx.beginPath(); ctx.moveTo(c.x-10,c.y-10); ctx.lineTo(c.x,c.y-26); ctx.lineTo(c.x+10,c.y-10);
+    ctx.stroke();
+    ctx.fillStyle=col; ctx.beginPath(); ctx.arc(c.x,c.y-26,3,0,6.284); ctx.fill();
+    // capture progress
+    if(c.prog!==0&&Math.abs(c.prog)<1){
+      ctx.strokeStyle=c.prog>0?"#57E8CC":"#FF6A34"; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.arc(c.x,c.y,16,-1.57,-1.57+6.284*Math.abs(c.prog)); ctx.stroke();
+    }
+    ctx.fillStyle=col; ctx.globalAlpha=.8; ctx.textAlign="center";
+    ctx.font="600 9px 'Oxanium',sans-serif";
+    ctx.fillText(c.name.toUpperCase(),c.x,c.y+c.r-8);
+    ctx.globalAlpha=1;
+  }
+  if(G.msn) for(const z of G.msn.zones){
+    if(z.x<L||z.x>R||z.y<T||z.y>B) continue;
+    const p=.6+.4*Math.sin(G.t*2.4);
+    ctx.strokeStyle="#57E8CC"; ctx.globalAlpha=.35+.3*p; ctx.lineWidth=2; ctx.setLineDash([10,8]);
+    ctx.beginPath(); ctx.arc(z.x,z.y,z.r,G.t*.4,G.t*.4+6.284); ctx.stroke(); ctx.setLineDash([]);
+    if(z.label){ ctx.fillStyle="#57E8CC"; ctx.textAlign="center";
+      ctx.font="600 10px 'Oxanium',sans-serif"; ctx.fillText(z.label.toUpperCase(),z.x,z.y-z.r-8); }
+    ctx.globalAlpha=1;
+  }
+
+  // ore chimneys + salvage wrecks
   for(const n of G.nodes){
     if(n.amt<=0||n.x<L||n.x>R||n.y<T||n.y>B||!seenAt(n.x,n.y)) continue;
+    if(n.wreck){
+      // shattered hull section, ribs showing, sulfur glinting in the tear
+      ctx.save(); ctx.translate(n.x,n.y); ctx.rotate((n.id%7)*.9);
+      ctx.fillStyle="rgba(0,0,0,.35)"; ctx.fillRect(-16,-8,34,20);
+      ctx.fillStyle="#22303A"; ctx.beginPath();
+      ctx.moveTo(-18,-6); ctx.lineTo(14,-12); ctx.lineTo(18,4); ctx.lineTo(-10,12); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle="#314855"; ctx.lineWidth=2;
+      for(let i=-1;i<3;i++){ ctx.beginPath(); ctx.moveTo(i*8-6,-10); ctx.lineTo(i*8-2,10); ctx.stroke(); }
+      ctx.fillStyle="#F0C24B"; ctx.globalAlpha=.85;
+      ctx.beginPath(); ctx.arc(2,0,4.5*(n.amt/n.max)+1.5,0,6.284); ctx.fill();
+      ctx.globalAlpha=1; ctx.restore();
+      continue;
+    }
     const f=.42+.58*(n.amt/n.max), h=13+f*15;
     ctx.fillStyle="#3A3524";
     ctx.beginPath(); ctx.moveTo(n.x-11,n.y+7); ctx.lineTo(n.x-5,n.y-h); ctx.lineTo(n.x+5,n.y-h);
@@ -1502,8 +1861,10 @@ function drawFx(){
 }
 let fogC=null,fogX=null,fogImg=null,fogDirty=true;
 function syncFog(){
-  if(!fogC){ fogC=document.createElement("canvas"); fogC.width=MAP_W; fogC.height=MAP_H;
-             fogX=fogC.getContext("2d"); fogImg=fogX.createImageData(MAP_W,MAP_H); }
+  if(!fogC||fogC.width!==MAP_W||fogC.height!==MAP_H){
+    fogC=document.createElement("canvas"); fogC.width=MAP_W; fogC.height=MAP_H;
+    fogX=fogC.getContext("2d"); fogImg=fogX.createImageData(MAP_W,MAP_H); fogDirty=true;
+  }
   if(!fogDirty) return;
   fogDirty=false;
   const dd=fogImg.data;
@@ -1540,7 +1901,17 @@ function drawSonar(dt){
   sx.imageSmoothingEnabled=false;
   // resources
   for(const n of G.nodes){ if(n.amt<=0||!seenAt(n.x,n.y)) continue;
-    sx.fillStyle="#F0C24B"; sx.fillRect(n.x/WORLD_W*S-1.5,n.y/WORLD_H*S-1.5,3,3); }
+    sx.fillStyle=n.wreck?"#B08D3A":"#F0C24B"; sx.fillRect(n.x/WORLD_W*S-1.5,n.y/WORLD_H*S-1.5,3,3); }
+  // extractor relays: diamonds in owner colour
+  for(const c of G.cps){ if(!seenAt(c.x,c.y)) continue;
+    const px=c.x/WORLD_W*S, py=c.y/WORLD_H*S, s2=3.4*(S/292);
+    sx.fillStyle=c.owner===PLAYER?"#57E8CC":c.owner===ENEMY?"#FF6A34":"#8FA6AE";
+    sx.save(); sx.translate(px,py); sx.rotate(.785); sx.fillRect(-s2,-s2,s2*2,s2*2); sx.restore(); }
+  // mission zones
+  if(G.msn) for(const z of G.msn.zones){
+    sx.strokeStyle="#57E8CC"; sx.globalAlpha=.8; sx.lineWidth=1;
+    sx.beginPath(); sx.arc(z.x/WORLD_W*S,z.y/WORLD_H*S,Math.max(3,z.r/WORLD_W*S),0,6.284); sx.stroke();
+    sx.globalAlpha=1; }
   // contacts
   for(const e of G.ents){
     if(e.dead) continue;
@@ -1593,7 +1964,7 @@ sonar.addEventListener("pointermove",e=>{ if(!G.paused&&e.buttons&1) sonarTo(e);
 
 /* --------------------------------- HUD ----------------------------------- */
 const el=id=>document.getElementById(id);
-const lastSig={cmds:"",roster:"",queue:""};
+const lastSig={cmds:"",roster:"",queue:"",objs:""};
 function toast(msg,warn){
   const box=el("toasts"), d=document.createElement("div");
   d.className="toast"+(warn?" warn":""); d.textContent=msg;
@@ -1612,6 +1983,27 @@ function updateHUD(){
   const ib=el("idleBtn");
   ib.classList.toggle("hide",!nIdle||!G.started||!!G.over);
   if(nIdle) ib.textContent="⛏ "+nIdle;
+
+  // mission objectives
+  const op=el("objPanel");
+  if(G.msn&&G.started&&!G.over){
+    op.classList.remove("hide");
+    const fmtP=o=>{
+      if(o.type==="ore") return `<span class="prg">${Math.min(o.prog,o.amt)|0} / ${o.amt}</span>`;
+      if(o.type==="survive") return `<span class="prg">${fmtTime(Math.max(0,o.dur-o.prog))}</span>`;
+      if(o.type==="holdCP") return `<span class="prg">${fmtTime(Math.max(0,o.dur-o.prog))} · ${G.cps.filter(c=>c.owner===PLAYER).length}/${o.n} held</span>`;
+      if(o.type==="evac") return `<span class="prg">${o.prog|0} / ${o.n}</span>`;
+      return "";
+    };
+    const sig=G.msn.objs.map(o=>o.text+"|"+(o.done?1:0)+"|"+fmtP(o)).join("§");
+    if(sig!==lastSig.objs){
+      lastSig.objs=sig;
+      op.innerHTML=`<div class="obj" style="border-left-color:transparent;background:none;padding:0 10px"><b>OBJECTIVES</b></div>`+
+        G.msn.objs.map(o=>
+          `<div class="obj${o.done?" done":""}${o.optional?" opt":""}">${o.optional?"<b>OPTIONAL</b>":""}${o.text} ${fmtP(o)}</div>`
+        ).join("");
+    }
+  } else op.classList.add("hide");
 
   G.sel=G.sel.filter(e=>!e.dead);
   const sel=G.sel;
@@ -1974,15 +2366,18 @@ let last=now(), hudAcc=0, sonAcc=0, endAcc=0;
 function frame(){
   requestAnimationFrame(frame);
   const t=now(); let dt=Math.min(.05,t-last); last=t;
-  if(G.started&&!G.over&&!G.paused){
+  if(G.started&&!G.over&&!G.paused&&!Scene.active){
     G.t+=dt; G.alertCd-=dt; camShake=Math.max(0,camShake-dt*30);
     rehash();
     for(const e of G.ents){ if(e.dead) continue;
       if(e.kind==="unit") tickUnit(e,dt); else tickBld(e,dt); }
-    tickProjs(dt); tickFx(dt); tickAI(dt);
+    tickProjs(dt); tickFx(dt);
+    if((G.cfg.ai||"full")==="full") tickAI(dt);
+    tickCPs(dt);
     G.fogTimer-=dt; if(G.fogTimer<=0){ G.fogTimer=.22; refreshFog(); }
     if(G.deadN>50){ G.ents=G.ents.filter(e=>!e.dead); G.deadN=0; }
-    endAcc+=dt; if(endAcc>=.5){ endAcc=0; checkEnd(); }
+    if(G.mode==="campaign") tickMission(dt);
+    else { endAcc+=dt; if(endAcc>=.5){ endAcc=0; checkEnd(); } }
   }
   tickCamera(dt);
   render();
@@ -1996,7 +2391,7 @@ function checkEnd(){
     if(e.team===PLAYER){
       if(e.kind==="bld") pB++;
       else { pU++; if(DEFS[e.type].worker) pW++; }
-    } else if(e.kind==="bld") eB++;
+    } else if(e.team===ENEMY&&e.kind==="bld") eB++;
   }
   if(eB===0) return endGame(true);
   if(pB===0&&pU===0) return endGame(false);

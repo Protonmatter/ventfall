@@ -1,22 +1,32 @@
 # VENTFALL
 
+**[▶ Play it now](https://protonmatter.github.io/ventfall/)** — nothing to install.
+
 A real-time strategy game that runs in a browser. One HTML file, no build step, no
-dependencies, no network calls. All graphics are drawn procedurally to canvas and
-all in-game audio is synthesized at runtime with the Web Audio API.
+dependencies, no network calls — the fonts are embedded and the page works fully
+offline. All graphics are drawn procedurally to canvas; audio plays from the
+repo's own pre-rendered sound pack when served over HTTP and falls back to live
+Web Audio synthesis of the same cues when opened from disk.
 
 Two mining rigs sit on a hydrothermal field two miles down. Only one is there at
 shift end.
 
+![VENTFALL gameplay](docs/screenshot.png)
+
 ## Play
 
-Open `index.html` in any modern browser. That's the whole install.
+[protonmatter.github.io/ventfall](https://protonmatter.github.io/ventfall/), or
+open `index.html` in any modern browser. That's the whole install.
 
-Or serve it:
+Or serve it locally (enables the pre-rendered audio pack):
 
 ```bash
 python3 -m http.server 8000
 # http://localhost:8000
 ```
+
+Three difficulties on the title screen — Calm Vent, Standard, Black Smoker —
+set the opponent's wave size, growth, and timing. Your choice is remembered.
 
 ## Controls
 
@@ -26,15 +36,28 @@ python3 -m http.server 8000
 | Click | Select one unit or structure |
 | Double-click | Select all of that type on screen |
 | Right click | Move · attack · mine · build (context-sensitive) |
-| `W` `A` `S` `D` | Pan the field (screen edges also pan) |
+| `Shift`+Right click | Queue a waypoint |
+| `W` `A` `S` `D` / Arrows | Pan the field (screen edges also pan) |
+| Mouse wheel | Zoom |
 | `Q` | Attack-move |
 | `E` | Stop |
+| `F` | Pause (also auto-pauses when the tab is hidden) |
+| `` ` `` | Select entire army |
 | `Ctrl`+`1`–`9` | Assign control group |
-| `1`–`9` | Recall control group |
+| `1`–`9` | Recall control group (double-tap to center camera) |
 | `Space` | Snap camera to your Rig Core |
 | `Esc` | Cancel pending order |
 | `V` `B` `N` `K` | Build Habitat · Foundry · Turret · Deepworks |
+| `D` `L` `G` `R` `M` `Y` | Train from the selected structure |
 | `P` `O` `U` | Research Plating · Optics · Servos |
+
+With a production structure selected, right-click sets its rally point (drawn as
+a flag) and clicking a queue cell cancels that unit for a full refund. Right-click
+the sonar to order the selection from the minimap. The topbar has volume, mute,
+pause, restart, and an idle-drone counter that cycles idle workers when clicked.
+
+**Touch:** tap to select, drag for a selection box, tap open ground to order,
+long-press for attack-move, two-finger drag to pan, pinch to zoom.
 
 ## Tech tree
 
@@ -70,12 +93,14 @@ Rig Core ──> Foundry ──> Deepworks
 
 ### Upgrades
 
-Team-wide, researched at the Deepworks, one at a time.
+Team-wide, researched at the Deepworks, one at a time. If the researching
+Deepworks is destroyed, the project moves to another Deepworks — or refunds
+if you have none.
 
 | Upgrade | Cost | Effect |
 |---|---|---|
 | Ablative Plating | 150 | +25% integrity (rescales existing units, preserving damage %) |
-| Pressure Optics | 175 | +18% weapon range |
+| Pressure Optics | 175 | +18% weapon range (turrets included) |
 | Servo Drives | 140 | +20% movement speed |
 
 ## Opponent
@@ -84,9 +109,12 @@ The AI runs a full economy: it expands drone count, builds Habitats against its 
 supply cap, adds Foundries, techs to a Deepworks, fields a mixed composition
 (Tender first, then Mortars, then Rippers), researches upgrades, and escalates
 attack waves on a timer with a cooldown between pushes. It is not scripted —
-it plays the same rules you do.
+it plays by the same core rules you do, with two stated asymmetries: it sees the
+whole map (no fog for the AI), and on Black Smoker it receives a small ore trickle.
 
-A passive player loses around 2:40. An engaged opening survives well past that.
+On Standard, a passive player loses around 2:40. An engaged opening survives well
+past that. Career stats — games, wins, fastest clear — persist in your browser
+and show on the shift report.
 
 ## Audio
 
@@ -95,21 +123,24 @@ A passive player loses around 2:40. An engaged opening survives well past that.
 oscillators and filtered noise — no sampled, recorded, or third-party audio at any
 stage. See `audio/AUDIO.md`.
 
-The game itself synthesizes its audio live and does not load these files; they are
-here for reuse.
+When the game is served over HTTP it plays the MP3 renders directly (fetched and
+decoded through one master gain with per-cue throttling). Opened from `file://`
+or offline, every cue falls back to an equivalent live-synthesized version, so
+the single file remains a complete game. The pack is also CC0 for reuse in your
+own projects.
 
 ## Project layout
 
 ```
 index.html        the entire game
 audio/wav/        32 effects, WAV
-audio/mp3/        32 effects, MP3
+audio/mp3/        32 effects, MP3 (loaded by the game when served)
 audio/synth.py    regenerates the pack
 audio/AUDIO.md    per-file reference and integration notes
-docs/             notes
+docs/             implementation notes + screenshot
 ```
 
-## Licence
+## License
 
 MIT for the code, CC0 for the audio. See `LICENSE`.
 

@@ -50,11 +50,43 @@ and attack waves pile against terrain halfway across.
 grid, roster and queue. Rebuilding every frame destroys buttons mid-click and
 breaks keyboard focus.
 
+**Construction HP is additive.** `tickBld` adds `maxHp*.88*(dProg/work)` per
+tick instead of assigning HP from total progress — assigning would silently heal
+any damage the site took, making unfinished buildings unkillable while a worker
+stands next to them.
+
+**Research survives its building.** `G.research[team].bld` is reassigned to
+another built Deepworks in `killEnt`, or refunded and cleared if none exists.
+Without this the slot stays occupied forever and the team can never research
+again.
+
+**Physics is dt-scaled.** Damping uses `Math.pow(base, dt*60)` and impulses
+multiply by `dt*60` (clamped), so 144Hz displays play like 60Hz ones. Don't add
+a bare `u.vx*=k` — it re-introduces refresh-rate-dependent movement.
+
+**All world/screen conversion goes through `s2w()` and `vw()`/`vh()`.** The
+renderer applies `scale(zoom)` before the camera translate; camera clamps,
+culling rects, the fog/terrain blit windows and the sonar viewport all divide by
+`zoom`. A new screen-space feature must use these helpers or it breaks the
+moment someone zooms.
+
+**Audio prefers the shipped pack.** `Audio_.loadPack()` fetches `audio/mp3/*`
+and each cue tries `playBuf(name)` before its synth body. Never call `playBuf`
+without a synth fallback: `file://` and offline pages have no buffers and the
+cue would silently vanish. `?nopause` in the URL disables auto-pause-on-hide
+(for capture tools and automated tests whose embedded pages always report
+`visibilityState === "hidden"`).
+
+**`localStorage` keys** are `ventfall.settings` (volume/mute),
+`ventfall.difficulty`, and `ventfall.stats` (career record). All reads go
+through `store.read` with fallbacks — private-mode browsers throw on access.
+
 ## Balance dials
 
-- `waveSize` (start 6), `+3` per wave, cap 20 — enemy push size
-- `firstPush` (95s) — grace period before the first attack, also reused as the
-  inter-wave cooldown (26s)
+- `DIFFS` — per-difficulty `wave0` / `waveInc` / `waveCap` / `first` (grace
+  period before the first push) / `aiOre` (flat AI trickle per 0.6s tick,
+  Black Smoker only)
+- inter-wave cooldown: `G.firstPush = G.t + 26` after each push
 - `DEFS[x].cost` / `.train` — economy pacing
 - crew cap is `gives: 8` per Habitat, hard cap 120
 
@@ -64,3 +96,6 @@ breaks keyboard focus.
 - Pathing is local steering with a stuck-detector, not a planner. Units handle
   concave terrain but can take scenic routes on long diagonals.
 - Tier II sprites have not been eyeballed at scale in a large mixed squad.
+- The AI ignores fog (full-map vision) and does not use waypoints, rally
+  points, or attack-move — it issues plain attack orders at the nearest
+  player structure.

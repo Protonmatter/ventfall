@@ -367,16 +367,37 @@ let difficulty="normal";
 let CS=null;   // campaign state; null in free play — defined fully in the campaign section
 
 // Upgrades researched at the Deepworks. Each applies globally to that team.
+// Research is tiered: three levels each, rising cost, stacking effect.
 const UPGRADES={
-  plating :{name:"Ablative Plating", cost:150, time:30, key:"P", desc:"+25% unit integrity"},
-  optics  :{name:"Pressure Optics",  cost:175, time:34, key:"O", desc:"+18% weapon range"},
-  servos  :{name:"Servo Drives",     cost:140, time:26, key:"U", desc:"+20% movement speed"}
+  plating :{name:"Ablative Plating", cost:130, time:26, key:"P", desc:"+12% unit integrity / level", maxLv:3},
+  optics  :{name:"Pressure Optics",  cost:150, time:30, key:"O", desc:"+8% weapon range / level",   maxLv:3},
+  servos  :{name:"Servo Drives",     cost:120, time:24, key:"U", desc:"+8% movement speed / level", maxLv:3}
 };
-function hasUp(team,k){ return !!(G.up&&G.up[team]&&G.up[team][k]); }
-// Effective stat helpers — upgrades never mutate DEFS.
-function uHp(team,d){ return Math.round(d.hp*(hasUp(team,"plating")?1.25:1)); }
-function uRng(team,d){ return d.rng*(hasUp(team,"optics")?1.18:1); }
-function uSpd(team,d){ return d.spd*(hasUp(team,"servos")?1.2:1); }
+const upCost=(u,lv)=>Math.round(u.cost*(1+.7*lv));
+const upTime=(u,lv)=>Math.round(u.time*(1+.35*lv));
+function upLv(team,k){ return (G.up&&G.up[team]&&G.up[team][k])||0; }
+// Effective stat helpers — upgrades never mutate DEFS. Campaign meta-upgrades
+// (CS.meta) stack on the player side only.
+function uHp(team,d){
+  let m=1+.12*upLv(team,"plating");
+  if(team===PLAYER&&CS) m*=1+.06*(CS.meta.hullBoost||0);
+  return Math.round(d.hp*m);
+}
+function uRng(team,d){ return d.rng*(1+.08*upLv(team,"optics")); }
+function uSpd(team,d){
+  let m=1+.08*upLv(team,"servos");
+  if(team===PLAYER&&CS) m*=1+.04*(CS.meta.driveBoost||0);
+  return d.spd*m;
+}
+// Between-mission salvage upgrades (campaign only)
+const META=[
+  {k:"oreBoost",   name:"Ore Reserves",    desc:"+60 starting ore per level",        cost:[80,120,180]},
+  {k:"hullBoost",  name:"Reinforced Hulls",desc:"+6% unit integrity per level",      cost:[100,150,220]},
+  {k:"driveBoost", name:"Tuned Drives",    desc:"+4% unit speed per level",          cost:[90,140,200]},
+  {k:"salvTeams",  name:"Salvage Teams",   desc:"+25% wreck salvage yield per level",cost:[70,110,160]},
+  {k:"vetTraining",name:"Veteran Cadre",   desc:"units muster with combat experience",cost:[120,180,260]},
+  {k:"deepScan",   name:"Deep Scan Array", desc:"+1 sensor radius per level",        cost:[80,130,190]}
+];
 
 /* ------------------------------- utils ---------------------------------- */
 const clamp=(v,a,b)=>v<a?a:v>b?b:v;
@@ -683,6 +704,11 @@ function spawnUnit(type,team,x,y){
   const e={id:G.nextId++,kind:"unit",type,team,x,y,vx:0,vy:0,hp:mh,maxHp:mh,r:d.r,
     state:"idle",tx:0,ty:0,tgt:null,node:null,site:null,cd:rnd()*.5,carry:0,face:0,
     acqCd:0,agro:false,dead:false,path:[],tag:null,kills:0,rank:0};
+  // Veteran Cadre: campaign units muster already blooded
+  if(team===PLAYER&&CS&&CS.meta.vetTraining&&!d.worker){
+    e.kills=CS.meta.vetTraining*2; e.rank=rankFor(e.kills);
+    if(e.rank){ e.maxHp=Math.round(e.maxHp*(1+.1*e.rank)); e.hp=e.maxHp; }
+  }
   G.ents.push(e); return e;
 }
 function spawnBld(type,team,tx,ty,done){
@@ -695,8 +721,9 @@ function spawnBld(type,team,tx,ty,done){
     if(inMap(tx+ox,ty+oy)) G.blocked[bIdx(tx+ox,ty+oy)]=2;
   G.ents.push(e); return e;
 }
-function killEnt(e){
+function killEnt(e,src){
   if(e.dead) return; e.dead=true; G.deadN++;
+  if(src&&!friendly(src.team,e.team)) creditKill(src);
   if(e.kind==="bld"){
     for(let ox=0;ox<e.w;ox++) for(let oy=0;oy<e.h;oy++)
       if(inMap(e.tx+ox,e.ty+oy)) G.blocked[bIdx(e.tx+ox,e.ty+oy)]=0;
@@ -712,7 +739,7 @@ function killEnt(e){
     if(r&&r.bld===e){
       const alt=G.ents.find(o=>!o.dead&&o!==e&&o.team===tm&&o.kind==="bld"&&DEFS[o.type].upgrades&&o.built);
       if(alt) r.bld=alt;
-      else { G.ore[tm]+=UPGRADES[r.key].cost; G.research[tm]=null;
+      else { G.ore[tm]+=r.cost||UPGRADES[r.key].cost; G.research[tm]=null;
              if(tm===PLAYER) toast("Research lost — ore refunded",1); }
     }
   }
@@ -838,12 +865,14 @@ function cancelQueued(b,i){
   lastSig.queue="";   // force the queue strip to rebuild next HUD pass
 }
 function tryResearch(b,key){
-  const team=b.team, u=UPGRADES[key];
-  if(G.up[team][key]){ if(team===PLAYER){toast("Already researched",1);Audio_.denied();} return false; }
+  const team=b.team, u=UPGRADES[key], lv=upLv(team,key);
+  if(lv>=u.maxLv){ if(team===PLAYER){toast("Fully researched",1);Audio_.denied();} return false; }
   if(G.research[team]){ if(team===PLAYER){toast("Research already in progress",1);Audio_.denied();} return false; }
-  if(G.ore[team]<u.cost){ if(team===PLAYER){toast("Not enough ore",1);Audio_.alertRes();} return false; }
-  G.ore[team]-=u.cost;
-  G.research[team]={key,t:u.time,total:u.time,bld:b};
+  const cost=upCost(u,lv);
+  if(G.ore[team]<cost){ if(team===PLAYER){toast("Not enough ore",1);Audio_.alertRes();} return false; }
+  G.ore[team]-=cost;
+  const tt=upTime(u,lv);
+  G.research[team]={key,t:tt,total:tt,cost,bld:b};
   if(team===PLAYER) Audio_.click();
   return true;
 }
@@ -880,8 +909,8 @@ function tickBld(b,dt){
     if(r&&r.bld===b){
       r.t-=dt;
       if(r.t<=0){
-        G.up[b.team][r.key]=true; G.research[b.team]=null;
-        if(b.team===PLAYER){ toast(UPGRADES[r.key].name+" online"); Audio_.research(); }
+        G.up[b.team][r.key]=(G.up[b.team][r.key]||0)+1; G.research[b.team]=null;
+        if(b.team===PLAYER){ toast(UPGRADES[r.key].name+" "+["I","II","III"][G.up[b.team][r.key]-1]+" online"); Audio_.research(); }
         // retroactively apply plating to existing units
         if(r.key==="plating") G.ents.forEach(e=>{
           if(e.dead||e.team!==b.team||e.kind!=="unit") return;
@@ -912,10 +941,10 @@ function findTarget(e,rad){
 /* ------------------------------- combat --------------------------------- */
 function shoot(from,to,dmg,color,splash){
   G.projs.push({x:from.x,y:from.y,tx:to.x,ty:to.y,t:splash?null:to,dmg,color,life:0,
-    splash:splash||0,
+    splash:splash||0, src:from,
     dur:Math.max(.09,dist(from,to)/(splash?330:620)),team:from.team});
 }
-function damage(e,dmg,team){
+function damage(e,dmg,team,src){
   if(e.dead) return;
   const ar=DEFS[e.type].armor||0;
   e.hp-=Math.max(1,dmg-ar);
@@ -926,7 +955,25 @@ function damage(e,dmg,team){
   }
   // units defend themselves if struck (both teams)
   if(e.kind==="unit"&&!e.tgt&&e.state!=="attack") e.agro=true;
-  if(e.hp<=0) killEnt(e);
+  if(e.hp<=0) killEnt(e,src);
+}
+// veterancy: 2 / 5 / 10 kills → ranks I-III, +10% damage and integrity per rank
+const RANK_KILLS=[2,5,10];
+function rankFor(k){ return k>=10?3:k>=5?2:k>=2?1:0; }
+function creditKill(src){
+  if(!src||src.dead||src.kind!=="unit") return;
+  src.kills++;
+  const r=rankFor(src.kills);
+  if(r>src.rank){
+    const f=src.hp/src.maxHp;
+    src.maxHp=Math.round(src.maxHp*(1+.1*(r-src.rank)));
+    src.hp=Math.min(src.maxHp,src.maxHp*f+15);   // promotion patches the hull a little
+    src.rank=r;
+    if(src.team===PLAYER){
+      fx_text(src.x,src.y-src.r-8,"▲ RANK "+["","I","II","III"][r],"#8CF5E0");
+      Audio_.research();
+    }
+  }
 }
 
 /* ------------------------------ unit tick -------------------------------- */
@@ -996,7 +1043,9 @@ function tickUnit(u,dt){
     case "mining":
       if(u.cd<=0){
         if(!u.node||u.node.amt<=0){ if(!assignNearestNode(u)) u.state="idle"; break; }
-        const take=Math.min(8,u.node.amt); u.node.amt-=take; u.carry=take;
+        const take=Math.min(8,u.node.amt); u.node.amt-=take;
+        // salvage teams squeeze more out of wreck plating than raw seam ore
+        u.carry=u.node.wreck&&u.team===PLAYER&&CS?Math.round(take*(1+.25*(CS.meta.salvTeams||0))):take;
         u.state="return";
       }
       break;
@@ -1039,11 +1088,12 @@ function attackTick(u,d){
   if(u.cd>0||!t||t.dead) return;
   if(d.minRng&&dist(u,t)<d.minRng) return;   // artillery cannot fire point-blank
   u.cd=d.rate;
+  const dmgOut=d.dmg*(1+.1*u.rank);   // veterancy bonus
   if(d.shoots){
-    shoot(u,t,d.dmg,u.team===PLAYER?"#8CF5E0":"#FFB07A",d.splash||0);
+    shoot(u,t,dmgOut,u.team===ENEMY?"#FFB07A":"#8CF5E0",d.splash||0);
     d.splash?Audio_.shootT():Audio_.shootS();
   }
-  else { fx_slash(t.x,t.y,u.face); Audio_.hit(); damage(t,d.dmg,u.team); }
+  else { fx_slash(t.x,t.y,u.face); Audio_.hit(); damage(t,dmgOut,u.team,u); }
 }
 function nearestDrop(u){
   let best=null,bd=1e18;
@@ -1101,10 +1151,10 @@ function tickProjs(dt){
         near(p.tx,p.ty,p.splash+30,o=>{
           if(o.dead||friendly(o.team,p.team)) return;
           const dd=Math.hypot(o.x-p.tx,o.y-p.ty);
-          if(dd<=p.splash+o.r) damage(o,p.dmg*(1-.55*(dd/(p.splash+o.r))),p.team);
+          if(dd<=p.splash+o.r) damage(o,p.dmg*(1-.55*(dd/(p.splash+o.r))),p.team,p.src);
         });
         boom(p.tx,p.ty,p.splash*.8,false);
-      } else if(p.t&&!p.t.dead) damage(p.t,p.dmg,p.team);
+      } else if(p.t&&!p.t.dead) damage(p.t,p.dmg,p.team,p.src);
       fx_spark(p.tx,p.ty); if(!p.splash) Audio_.hit();
       G.projs.splice(i,1);
     }
@@ -1135,7 +1185,8 @@ function refreshFog(){
   for(let i=0;i<G.fog.length;i++) if(G.fog[i]===2) G.fog[i]=1;
   for(const e of G.ents){
     if(e.dead||e.team===ENEMY) continue;   // allies grant vision too
-    const rad=e.kind==="bld"?(e.type==="turret"?7:9):(e.type==="gunner"?7:6);
+    let rad=e.kind==="bld"?(e.type==="turret"?7:9):(e.type==="gunner"?7:6);
+    if(e.team===PLAYER&&CS) rad+=CS.meta.deepScan||0;
     const cx=(e.x/TILE)|0, cy=(e.y/TILE)|0;
     for(let ox=-rad;ox<=rad;ox++) for(let oy=-rad;oy<=rad;oy++){
       if(ox*ox+oy*oy>rad*rad) continue;
@@ -1189,7 +1240,7 @@ function tickAI(dt){
     else if(G.ore[ENEMY]>=150) tryTrain(w,"ripper");
   });
   if(works.length&&!G.research[ENEMY]&&G.ore[ENEMY]>=420){
-    const pick=["plating","optics","servos"].find(k=>!G.up[ENEMY][k]);
+    const pick=["plating","optics","servos"].find(k=>upLv(ENEMY,k)<UPGRADES[k].maxLv);
     if(pick) tryResearch(works[0],pick);
   }
 
@@ -1751,6 +1802,16 @@ function drawUnit(u){
   }
   ctx.restore();
   hpBar(u,u.r*2.4);
+  // veterancy chevrons
+  if(u.rank>0){
+    const y0=u.y-u.r-13;
+    ctx.strokeStyle=u.team===ENEMY?"#FFB07A":"#8CF5E0"; ctx.lineWidth=1.6; ctx.globalAlpha=.9;
+    for(let i=0;i<u.rank;i++){
+      const yy=y0-i*4;
+      ctx.beginPath(); ctx.moveTo(u.x-4,yy); ctx.lineTo(u.x,yy-3); ctx.lineTo(u.x+4,yy); ctx.stroke();
+    }
+    ctx.globalAlpha=1;
+  }
 }
 function drawBld(b){
   const c=TEAMC[b.team], W=b.w*TILE, H=b.h*TILE, x=b.tx*TILE, y=b.ty*TILE;
@@ -2027,6 +2088,7 @@ function updateHUD(){
     stats.innerHTML=
       `<div><b>Integrity</b><span>${Math.max(0,Math.round(e.hp))} / ${e.maxHp}</span></div>`+
       (d.dmg?`<div><b>Damage</b><span>${d.dmg}</span></div><div><b>Range</b><span>${d.rng}</span></div>`:"")+
+      (e.kind==="unit"&&e.rank?`<div><b>Rank</b><span>${["","I","II","III"][e.rank]} · ${e.kills} kills</span></div>`:"")+
       (e.carry?`<div><b>Carrying</b><span>${e.carry} ore</span></div>`:"")+
       (d.gives&&e.built?`<div><b>Crew berths</b><span>+${d.gives}</span></div>`:"");
     roster.innerHTML=""; lastSig.roster="";
@@ -2086,10 +2148,11 @@ function updateHUD(){
   if(pb&&pb.built&&DEFS[pb.type].upgrades&&pb.team===PLAYER){
     const active=G.research[PLAYER];
     Object.entries(UPGRADES).forEach(([k,u])=>{
-      const done=G.up[PLAYER][k], running=active&&active.key===k;
-      btns.push({label:u.name,key:u.key,
-        cost: done?"researched" : running?Math.ceil(active.t)+"s" : u.cost+" ore",
-        dis: done||!!active||G.ore[PLAYER]<u.cost,
+      const lv=upLv(PLAYER,k), maxed=lv>=u.maxLv, running=active&&active.key===k;
+      const nm=u.name+(lv?" "+["I","II","III"][lv-1]:"");
+      btns.push({label:maxed?nm:u.name+" "+["I","II","III"][lv],key:u.key,
+        cost: maxed?"maxed" : running?Math.ceil(active.t)+"s" : upCost(u,lv)+" ore",
+        dis: maxed||!!active||G.ore[PLAYER]<upCost(u,lv),
         act:()=>tryResearch(pb,k)});
     });
   }

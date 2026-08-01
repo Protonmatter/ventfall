@@ -67,11 +67,23 @@ body{user-select:none;-webkit-user-select:none;touch-action:none}
 .tbtn.hide{display:none}
 #volSlider{width:70px;accent-color:var(--glow);cursor:pointer}
 #idleBtn{color:var(--sulfur)}
-#pauseBanner{position:absolute;inset:0;z-index:5;display:grid;place-items:center;pointer-events:none;
-  background:rgba(3,8,12,.45)}
-#pauseBanner span{font-family:"Oxanium",sans-serif;font-weight:800;font-size:26px;letter-spacing:.4em;
-  color:var(--glow);border:1px solid var(--edge-hi);background:rgba(7,15,21,.92);padding:14px 34px}
+#pauseBanner{position:absolute;inset:0;z-index:12;display:grid;place-items:center;
+  background:rgba(3,8,12,.62)}
 #pauseBanner.hide{display:none}
+#pauseCard{border:1px solid var(--edge-hi);background:rgba(7,15,21,.96);padding:26px 30px;
+  display:flex;flex-direction:column;gap:14px;width:min(430px,92vw)}
+#pauseCard .pTitle{font-family:"Oxanium",sans-serif;font-weight:800;font-size:22px;
+  letter-spacing:.4em;color:var(--glow);text-align:center}
+.pSlot{display:flex;align-items:center;gap:8px;border:1px solid var(--edge);padding:7px 10px}
+.pSlot .sl{font-family:"Oxanium",sans-serif;font-weight:700;font-size:10px;letter-spacing:.15em;
+  color:var(--glow);width:52px;flex:none}
+.pSlot .lb{flex:1;font-size:10.5px;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pSlot button,.pRow button{font-family:"Oxanium",sans-serif;font-weight:700;font-size:10px;
+  letter-spacing:.12em;padding:6px 10px;background:transparent;border:1px solid var(--edge-hi);
+  color:var(--bone);cursor:pointer}
+.pSlot button:hover:not(:disabled),.pRow button:hover:not(:disabled){border-color:var(--glow);color:var(--glow)}
+.pSlot button:disabled,.pRow button:disabled{opacity:.35;cursor:not-allowed}
+.pRow{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
 #diffRow{display:flex;gap:8px;margin-bottom:22px}
 .diff{font-family:"Oxanium",sans-serif;font-weight:700;font-size:11px;letter-spacing:.14em;
   text-transform:uppercase;padding:8px 14px;background:transparent;color:var(--mute);
@@ -318,7 +330,17 @@ h1 em{font-style:normal;color:var(--glow)}
     </div>
   </div>
 
-  <div id="pauseBanner" class="hide"><span>PAUSED</span></div>
+  <div id="pauseBanner" class="hide">
+    <div id="pauseCard">
+      <span class="pTitle">PAUSED</span>
+      <div id="pauseSlots"></div>
+      <div class="pRow">
+        <button id="pmResume">Resume (F)</button>
+        <button id="pmLoadAuto">Load Autosave</button>
+        <button id="pmTitle">Exit to Title</button>
+      </div>
+    </div>
+  </div>
 
   <div id="objPanel" class="hide" aria-live="off"></div>
   <div id="toasts" role="status" aria-live="polite"></div>
@@ -379,6 +401,7 @@ h1 em{font-style:normal;color:var(--glow)}
       <h1>SHIFT <em style="color:var(--vent)">LOST</em></h1>
       <p class="brief" id="failBrief"></p>
       <button class="btn" id="retryBtn">Retry the shift</button>
+      <button class="btn ghost" id="failLoadBtn">Load autosave</button>
       <button class="btn ghost" id="failTitleBtn">Abandon to title</button>
     </div>
   </div>
@@ -2594,7 +2617,10 @@ function startChapter(i,opts){
   if(!CS) CS=freshCS();
   const ch=CHAPTERS[i];
   if(!ch) return showEpilogue();
-  CS.chapter=i; saveCampaign();
+  CS.chapter=i;
+  // replaying a chapter reopens its decisions
+  (ch.ownFlags||[]).forEach(f=>{ delete CS.flags[f]; });
+  saveCampaign();
   hideScreens();
   Audio_.init();
   const shots=typeof ch.brief==="function"?ch.brief():ch.brief;
@@ -2627,6 +2653,11 @@ campaignMissionLost=function(why){
   showScreen("failScreen");
 };
 el("retryBtn").onclick=()=>{ startChapter(CS?CS.chapter:0,{skipBrief:true}); };
+el("failLoadBtn").onclick=()=>{
+  const sv=store.read("auto",null);
+  if(!sv){ toast("No autosave on record",1); return; }
+  hideScreens(); restoreGame(sv);
+};
 el("failTitleBtn").onclick=()=>{ G.started=false; showTitle(); };
 
 /* ------------------------------ salvage yard ------------------------------ */
@@ -2738,7 +2769,7 @@ CHAPTERS=[
     {who:"okafor", text:"First shift down, and they're already handing you a torch. Careful which end you hold, Commander."}
   ]
 },
-{ id:"c2", title:"Claim Jumpers", world:"Tantalus Ridge · 2,890 m",
+{ id:"c2", ownFlags:["sparedReyne"], title:"Claim Jumpers", world:"Tantalus Ridge · 2,890 m",
   salvage:130,
   map:{ w:72,h:72, ridges:26, brine:3, wrecks:2, corridor:true,
     bases:{player:{fx:.15,fy:.85,drones:4}, enemy:{fx:.85,fy:.15,drones:3}},
@@ -2775,7 +2806,7 @@ CHAPTERS=[
     {who:"krane", text:"Then it will appreciate the company."}
   ]
 },
-{ id:"c3", title:"The Quota", world:"Hadal Verge · 4,102 m",
+{ id:"c3", ownFlags:["heeded","overdrove"], title:"The Quota", world:"Hadal Verge · 4,102 m",
   salvage:150,
   map:{ w:80,h:64, ridges:30, brine:6, wrecks:2, corridor:false,
     bases:{player:{fx:.12,fy:.5,drones:5}, enemy:{fx:.88,fy:.5,drones:4}},
@@ -2853,7 +2884,7 @@ CHAPTERS=[
   ]
 },
 /* ---- ACT II · THE LONG DARK --------------------------------------------- */
-{ id:"c5", title:"Ashfall", world:"Meridian Field · dying · 3,214 m",
+{ id:"c5", ownFlags:["vossHeld","okaforFell"], title:"Ashfall", world:"Meridian Field · dying · 3,214 m",
   salvage:140,
   map:{ w:64,h:64, ridges:34, brine:8, wrecks:4, ventsN:12, corridor:false,
     bases:{player:{fx:.5,fy:.3,drones:3,
@@ -2908,7 +2939,7 @@ CHAPTERS=[
     {who:"narr", text:"South, the wreck fields waited — everything the Cascade broke, and everyone it hadn't finished."}
   ]
 },
-{ id:"c6", title:"The Drowned Court", world:"Cinder Basin wreck fields · 4,760 m",
+{ id:"c6", ownFlags:["alliance","absorbed","mercyLate"], title:"The Drowned Court", world:"Cinder Basin wreck fields · 4,760 m",
   salvage:160,
   map:{ w:72,h:72, ridges:30, brine:7, wrecks:7, ventsN:14, corridor:false,
     bases:{player:{fx:.5,fy:.85,drones:2}},
@@ -3018,7 +3049,7 @@ CHAPTERS=[
     {who:"sable", text:"Commander. The hydrophone array — it's ready. And the pattern in the southern vents has started… harmonising with our reactor hum. I don't think we found it. I think it noticed us."}
   ]
 },
-{ id:"c8", title:"The Choir", world:"The Singing Vents · 6,088 m",
+{ id:"c8", ownFlags:["choirPeace","choirHarvest"], title:"The Choir", world:"The Singing Vents · 6,088 m",
   salvage:190,
   map:{ w:80,h:72, ridges:34, brine:6, wrecks:2, ventsN:40, corridor:false,
     bases:{player:{fx:.5,fy:.88,drones:4,
@@ -3072,7 +3103,7 @@ CHAPTERS=[
   ]
 },
 /* ---- ACT III · WHAT THE FLOOR REMEMBERS --------------------------------- */
-{ id:"c9", title:"Leviathan's Crown", world:"The Great Bore · Krane's Bastion · 5,516 m",
+{ id:"c9", ownFlags:["kraneJudged","kraneExiled","kraneDrowned"], title:"Leviathan's Crown", world:"The Great Bore · Krane's Bastion · 5,516 m",
   salvage:250,
   map:{ w:88,h:80, ridges:38, brine:6, wrecks:4, ventsN:30, corridor:true,
     bases:{player:{fx:.12,fy:.88,drones:5},
@@ -3185,6 +3216,152 @@ function showEpilogue(){
   const shots=EPILOGUES[computeEnding()]();
   Scene.play(shots,()=>{ saveCampaign(); showTitle(); });
 }
+
+/* ============================ SAVE / LOAD ================================= */
+function u8ToB64(a){
+  let s="";
+  for(let i=0;i<a.length;i+=8192) s+=String.fromCharCode.apply(null,a.subarray(i,i+8192));
+  return btoa(s);
+}
+function b64ToU8(s){
+  const b=atob(s), a=new Uint8Array(b.length);
+  for(let i=0;i<b.length;i++) a[i]=b.charCodeAt(i);
+  return a;
+}
+function serializeGame(){
+  const ents=G.ents.filter(e=>!e.dead).map(e=>{
+    const o=Object.assign({},e);
+    o.tgt=e.tgt&&!e.tgt.dead?e.tgt.id:null;
+    o.site=e.site&&!e.site.dead?e.site.id:null;
+    o.node=e.node?e.node.id:null;
+    return o;
+  });
+  const groups={};
+  for(const k in G.groups) groups[k]=G.groups[k].filter(e=>!e.dead).map(e=>e.id);
+  return {
+    v:1, when:Date.now(), mode:G.mode, cfg:G.cfg, difficulty,
+    cs:CS?JSON.parse(JSON.stringify(CS)):null,
+    mapW:MAP_W, mapH:MAP_H, t:G.t, ore:G.ore, nextId:G.nextId,
+    cam:G.cam, zoom, wave:G.wave, waveSize:G.waveSize, waveInc:G.waveInc,
+    waveCap:G.waveCap, firstPush:G.firstPush, aiOre:G.aiOre, aiTimer:G.aiTimer,
+    alertCd:G.alertCd, fogTimer:0, ventHeal:!!G.ventHeal,
+    up:G.up, research:Object.fromEntries([0,1,2].map(tm=>{
+      const r=G.research[tm];
+      return [tm, r?{key:r.key,t:r.t,total:r.total,cost:r.cost,bld:r.bld&&!r.bld.dead?r.bld.id:null}:null];
+    })),
+    stats:G.stats, ents, nodes:G.nodes, cps:G.cps, vents:G.vents,
+    sel:G.sel.filter(e=>!e.dead).map(e=>e.id), groups,
+    blocked:u8ToB64(G.blocked), fog:u8ToB64(G.fog), slow:u8ToB64(G.slow),
+    msn:G.msn?{
+      ch:G.msn.ch, t:G.msn.t, evac:G.msn.evac,
+      objs:G.msn.objs.map(o=>({prog:o.prog,done:o.done,failed:o.failed})),
+      events:G.msn.events.map(ev=>({fired:ev.fired}))
+    }:null
+  };
+}
+function restoreGame(sv){
+  difficulty=sv.difficulty||difficulty;
+  CS=sv.cs||null;
+  setMapSize(sv.mapW,sv.mapH);
+  G={
+    t:sv.t, started:true, over:null, mode:sv.mode, cfg:sv.cfg,
+    ore:sv.ore, ents:[], nodes:sv.nodes||[], projs:[], fx:[], nextId:sv.nextId,
+    cam:sv.cam, sel:[], groups:{}, armed:null,
+    blocked:b64ToU8(sv.blocked), fog:b64ToU8(sv.fog), slow:b64ToU8(sv.slow),
+    cps:sv.cps||[], msn:null,
+    fogTimer:0, aiTimer:sv.aiTimer||0, wave:sv.wave, waveSize:sv.waveSize,
+    waveInc:sv.waveInc, waveCap:sv.waveCap, firstPush:sv.firstPush,
+    aiOre:sv.aiOre, paused:false, alertCd:sv.alertCd||0,
+    up:sv.up, research:{0:null,1:null,2:null},
+    stats:sv.stats, deadN:0, vents:sv.vents||[], ventHeal:!!sv.ventHeal
+  };
+  // entities, then re-link references by id
+  const byId=new Map(), nodeById=new Map();
+  for(const n of G.nodes) nodeById.set(n.id,n);
+  for(const so of sv.ents){ const e=Object.assign({},so); G.ents.push(e); byId.set(e.id,e); }
+  for(let i=0;i<G.ents.length;i++){
+    const e=G.ents[i], so=sv.ents[i];
+    e.tgt=so.tgt!=null?byId.get(so.tgt)||null:null;
+    e.site=so.site!=null?byId.get(so.site)||null:null;
+    e.node=so.node!=null?nodeById.get(so.node)||null:null;
+  }
+  for(const tm of [0,1,2]){
+    const r=sv.research[tm];
+    G.research[tm]=r?{key:r.key,t:r.t,total:r.total,cost:r.cost,bld:r.bld!=null?byId.get(r.bld)||null:null}:null;
+    if(G.research[tm]&&!G.research[tm].bld) G.research[tm]=null;
+  }
+  G.sel=(sv.sel||[]).map(id=>byId.get(id)).filter(Boolean);
+  for(const k in sv.groups||{}) G.groups[k]=sv.groups[k].map(id=>byId.get(id)).filter(Boolean);
+  if(sv.msn){
+    const ch=chapterById(sv.msn.ch);
+    if(ch){
+      G.msn={
+        ch:sv.msn.ch, t:sv.msn.t, evac:sv.msn.evac, over:false,
+        objs:(ch.objectives||[]).map((o,i)=>Object.assign({prog:0,done:false,failed:false},o,sv.msn.objs[i]||{})),
+        events:(ch.events||[]).map((_,i)=>({fired:!!(sv.msn.events[i]&&sv.msn.events[i].fired)})),
+        zones:(ch.zones||[]).map(z=>({x:fw(z.fx),y:fh(z.fy),r:z.r||90,label:z.label||"",evacTag:z.evacTag||null}))
+      };
+    }
+  }
+  prerenderTerrain();
+  fogDirty=true;
+  resetInput();
+  setZoom(sv.zoom||1);
+  Audio_.init(); Audio_.ambient();
+  hideScreens();
+  updateHUD();
+  toast("Shift restored");
+}
+const SLOT_KEYS=["slotA","slotB","slotC"];
+function slotMeta(key){
+  const sv=store.read(key,null);
+  if(!sv) return null;
+  const ch=sv.msn?chapterById(sv.msn.ch):null;
+  return {when:sv.when, label:(ch?ch.title:"Free Play")+" · "+fmtTime(sv.t)};
+}
+function saveToSlot(key){
+  if(!G.started||G.over){ toast("Nothing to save",1); return; }
+  try{ store.write(key,serializeGame()); toast("Saved — "+(key==="auto"?"autosave":"slot "+(SLOT_KEYS.indexOf(key)+1))); Audio_.click(); }
+  catch(err){ toast("Save failed — storage full?",1); }
+  renderPauseSlots();
+}
+function loadFromSlot(key){
+  const sv=store.read(key,null);
+  if(!sv){ toast("Empty slot",1); return; }
+  setPaused(false);
+  restoreGame(sv);
+}
+function autosaveMission(){
+  if(G.mode!=="campaign") return;
+  try{ store.write("auto",serializeGame()); }catch(err){}
+}
+function renderPauseSlots(){
+  const wrap=el("pauseSlots"); if(!wrap) return;
+  wrap.innerHTML="";
+  SLOT_KEYS.forEach((k,i)=>{
+    const m=slotMeta(k);
+    const row=document.createElement("div"); row.className="pSlot";
+    row.innerHTML=`<span class="sl">SLOT ${i+1}</span>
+      <span class="lb">${m?m.label+" · "+new Date(m.when).toLocaleString():"— empty —"}</span>`;
+    const bs=document.createElement("button"); bs.textContent="SAVE";
+    bs.disabled=!G.started||!!G.over;
+    bs.onclick=()=>saveToSlot(k);
+    const bl=document.createElement("button"); bl.textContent="LOAD"; bl.disabled=!m;
+    bl.onclick=()=>loadFromSlot(k);
+    row.appendChild(bs); row.appendChild(bl);
+    wrap.appendChild(row);
+  });
+  el("pmLoadAuto").disabled=!store.read("auto",null);
+}
+el("pmResume").onclick=()=>setPaused(false);
+el("pmLoadAuto").onclick=()=>loadFromSlot("auto");
+el("pmTitle").onclick=()=>{
+  G.paused=false; el("pauseBanner").classList.add("hide"); el("pauseBtn").textContent="⏸";
+  if(Audio_.ready&&Audio_.ctx.state==="suspended") Audio_.ctx.resume();
+  Audio_.stopAmbient();
+  G.started=false;
+  showTitle();
+};
 
 /* ------------------------------- input ----------------------------------- */
 const mouse={x:-1,y:-1,inside:false}, drag={on:false,x0:0,y0:0,moved:false};
@@ -3389,6 +3566,7 @@ function setPaused(p){
   G.paused=p;
   el("pauseBanner").classList.toggle("hide",!p);
   el("pauseBtn").textContent=p?"▶":"⏸";
+  if(p&&typeof renderPauseSlots==="function") renderPauseSlots();
   // silence everything while frozen; resume() is a no-op if we never suspended
   if(Audio_.ready){ p?Audio_.ctx.suspend():Audio_.ctx.resume(); }
 }

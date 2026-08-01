@@ -110,6 +110,13 @@ through `store.read` with fallbacks — private-mode browsers throw on access.
 - **URL flags**: `?nopause` disables auto-pause-on-hide (capture tools);
   `?debug` exposes `window.__V` (win/lose/start/spawn/save/load/ending) for
   automated testing.
+- **Voice-over is pre-rendered.** `audio/vo/<hash>.mp3` holds one neural-TTS
+  recording per dialog line, keyed by djb2 over UTF-8 of `who|text` — the
+  same hash `voHash()` computes at runtime, so there is no manifest. **If you
+  edit or add any `text:` in CHAPTERS/EPILOGUES, rerun `python
+  audio/makevo.py`** (needs `pip install edge-tts` + network, build-time
+  only); until then the changed line falls back to live browser speech.
+  Casting lives in the script's `CAST` table.
 
 ## Known rough edges
 

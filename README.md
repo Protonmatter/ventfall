@@ -22,6 +22,13 @@ gleaning the wreck-lands, defending refugees. Act III is what the floor
 remembers: first contact with something living in the vents, and the assault on
 Krane's dreadnought rig.
 
+Every line of dialogue is **fully voiced** — seven distinct neural-voice
+actors (each character has their own accent and cadence, from Okafor's
+Nigerian English to the Choir's slowed abyssal drone), shipped as
+pre-rendered recordings with ambient ducking and a per-cutscene voice
+toggle. Offline or `file://` play falls back to the browser's live speech
+synthesis.
+
 Eight major decisions shape a unity/dominion ledger and persistent flags — you
 can spare or strip a rival's survivors, defy or sign the quota, decide who
 holds the corridor at Ashfall (a beloved character can die there and stays dead

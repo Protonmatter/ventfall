@@ -1564,8 +1564,7 @@ function updateHUD(){
   const cv=el("capV"); cv.textContent=c.used+"/"+c.max;
   cv.classList.toggle("tight",c.max-c.used<=1);
   el("armyV").textContent=alive(PLAYER).filter(e=>e.kind==="unit"&&!DEFS[e.type].worker).length;
-  const m=Math.floor(G.t/60), s=Math.floor(G.t%60);
-  el("clock").textContent=String(m).padStart(2,"0")+":"+String(s).padStart(2,"0");
+  el("clock").textContent=fmtTime(G.t);
   const nIdle=idleWorkers().length;
   const ib=el("idleBtn");
   ib.classList.toggle("hide",!nIdle||!G.started||!!G.over);
@@ -1957,21 +1956,36 @@ function checkEnd(){
   if(pB===0&&pU===0) return endGame(false);
   if(pB===0&&pW===0) return endGame(false);
 }
+const fmtTime=t=>String(Math.floor(t/60)).padStart(2,"0")+":"+String(Math.floor(t%60)).padStart(2,"0");
+function recordGame(win){
+  const s=store.read("stats",{games:0,wins:0,best:0,mined:0,kills:0});
+  s.games++;
+  let newBest=false;
+  if(win&&(!s.best||G.t<s.best)){ s.best=G.t; newBest=true; }
+  if(win) s.wins++;
+  s.mined+=G.stats.mined; s.kills+=G.stats.killed;
+  store.write("stats",s);
+  return {career:s,newBest};
+}
 function endGame(win){
   G.over=win?"win":"lose";
   Audio_.stopAmbient();
   win?Audio_.win():Audio_.lose();
-  el("endEyebrow").textContent="Shift report · "+String(Math.floor(G.t/60)).padStart(2,"0")+":"+String(Math.floor(G.t%60)).padStart(2,"0");
+  const {career,newBest}=recordGame(win);
+  el("endEyebrow").textContent="Shift report · "+fmtTime(G.t);
   const ti=el("endTitle"); ti.className=win?"win":"lose";
   ti.innerHTML=win?'FIELD <em>HELD</em>':'RIG <em>LOST</em>';
-  el("endBrief").textContent=win
+  el("endBrief").textContent=(win
     ? "The other rig is scrap on the seabed. Ore keeps flowing, and the field is yours until the next shift rotates in."
-    : "Pressure breach across the whole rig. Salvage crews will be down within the week to pick over what's left.";
+    : "Pressure breach across the whole rig. Salvage crews will be down within the week to pick over what's left.")
+    +(newBest?" Fastest clear on record.":"");
   el("endStats").innerHTML=
     `<div><b>Ore mined</b><span>${G.stats.mined}</span></div>`+
     `<div><b>Kills</b><span>${G.stats.killed}</span></div>`+
     `<div><b>Losses</b><span>${G.stats.lost}</span></div>`+
-    `<div><b>Structures</b><span>${G.stats.built}</span></div>`;
+    `<div><b>Structures</b><span>${G.stats.built}</span></div>`+
+    `<div><b>Best win</b><span>${career.best?fmtTime(career.best):"—"}</span></div>`+
+    `<div><b>Record</b><span>${career.wins}·${career.games-career.wins}</span></div>`;
   el("endScreen").classList.remove("hide");
 }
 

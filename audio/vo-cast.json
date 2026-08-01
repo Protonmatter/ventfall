@@ -1,0 +1,11 @@
+{
+  "_default": {"voice": "en-GB-ThomasNeural", "rate": "-6%"},
+  "_subs":    [["⋮", ","], ["[▸·—…]", ", "]],
+  "voss":     {"voice": "en-US-AriaNeural"},
+  "okafor":   {"voice": "en-NG-AbeoNeural"},
+  "krane":    {"voice": "en-GB-RyanNeural", "rate": "+6%"},
+  "sable":    {"voice": "en-SG-LunaNeural", "rate": "+4%"},
+  "reyne":    {"voice": "en-AU-NatashaNeural"},
+  "choir":    {"voice": "en-US-GuyNeural", "rate": "-30%", "pitch": "-35Hz"},
+  "narr":     {"voice": "en-GB-ThomasNeural", "rate": "-6%"}
+}

@@ -1,0 +1,8 @@
+{
+  "_default": {"voice": "en-GB-ThomasNeural", "rate": "-6%"},
+  "_subs": [["⋮", ","], ["[▸·—…]", ", "]],
+  "hero":    {"voice": "en-US-AriaNeural"},
+  "mentor":  {"voice": "en-NG-AbeoNeural", "rate": "-4%"},
+  "villain": {"voice": "en-GB-RyanNeural", "rate": "+6%"},
+  "narr":    {"voice": "en-GB-ThomasNeural", "rate": "-6%"}
+}

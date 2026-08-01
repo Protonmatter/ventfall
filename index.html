@@ -43,10 +43,25 @@ body{user-select:none;-webkit-user-select:none;touch-action:none}
 #capV.tight{color:var(--vent)}
 #clock{margin-left:auto;color:var(--mute);font-size:13px;font-variant-numeric:tabular-nums}
 #audioCtl{display:flex;align-items:center;gap:8px;pointer-events:auto}
-#muteBtn{background:none;border:1px solid var(--edge-hi);color:var(--glow);width:24px;height:24px;
-  cursor:pointer;font-size:12px;line-height:1;display:grid;place-items:center}
-#muteBtn.off{color:var(--mute);border-color:var(--edge)}
+.tbtn{background:none;border:1px solid var(--edge-hi);color:var(--glow);min-width:24px;height:24px;
+  cursor:pointer;font-size:12px;line-height:1;display:grid;place-items:center;
+  font-family:"IBM Plex Mono",monospace;padding:0 5px;pointer-events:auto}
+.tbtn:hover{border-color:var(--glow)}
+.tbtn.off{color:var(--mute);border-color:var(--edge)}
+.tbtn.hide{display:none}
 #volSlider{width:70px;accent-color:var(--glow);cursor:pointer}
+#idleBtn{color:var(--sulfur)}
+#pauseBanner{position:absolute;inset:0;z-index:5;display:grid;place-items:center;pointer-events:none;
+  background:rgba(3,8,12,.45)}
+#pauseBanner span{font-family:"Oxanium",sans-serif;font-weight:800;font-size:26px;letter-spacing:.4em;
+  color:var(--glow);border:1px solid var(--edge-hi);background:rgba(7,15,21,.92);padding:14px 34px}
+#pauseBanner.hide{display:none}
+#diffRow{display:flex;gap:8px;margin-bottom:22px}
+.diff{font-family:"Oxanium",sans-serif;font-weight:700;font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;padding:8px 14px;background:transparent;color:var(--mute);
+  border:1px solid var(--edge-hi);cursor:pointer}
+.diff:hover{color:var(--bone)}
+.diff.sel{color:var(--glow);border-color:var(--glow);box-shadow:0 0 14px rgba(87,232,204,.2)}
 
 /* ---------- toasts ---------- */
 #toasts{position:absolute;top:52px;left:50%;transform:translateX(-50%);
@@ -79,15 +94,17 @@ body{user-select:none;-webkit-user-select:none;touch-action:none}
 #selStats b{font-family:"Oxanium",sans-serif;font-size:9px;letter-spacing:.16em;color:var(--mute);
   display:block;font-weight:600;text-transform:uppercase}
 #selStats span{font-variant-numeric:tabular-nums;font-weight:500}
-#roster{display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;overflow:hidden;max-height:56px}
+#roster{display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;overflow-y:auto;max-height:56px}
 .chip{width:30px;height:30px;border:1px solid var(--edge-hi);background:#0C1A22;position:relative;
   display:grid;place-items:center;font-family:"Oxanium",sans-serif;font-weight:800;font-size:12px;
-  color:var(--glow)}
+  color:var(--glow);cursor:pointer}
+.chip:hover{border-color:var(--glow)}
 .chip i{position:absolute;left:0;bottom:0;height:2px;background:var(--glow)}
 .chip.hurt i{background:var(--vent)}
 #queue{display:flex;gap:4px;align-items:center}
 .qcell{width:26px;height:26px;border:1px solid var(--edge);background:#0C1A22;position:relative;
-  display:grid;place-items:center;font-size:10px;font-weight:600;color:var(--mute)}
+  display:grid;place-items:center;font-size:10px;font-weight:600;color:var(--mute);cursor:pointer}
+.qcell:hover{border-color:var(--vent);color:var(--vent)}
 .qcell.act{border-color:var(--glow);color:var(--glow)}
 .qcell i{position:absolute;inset:auto 0 0 0;height:3px;background:var(--glow)}
 
@@ -157,10 +174,15 @@ h1 em{font-style:normal;color:var(--glow)}
     <div class="stat"><span class="k">Army</span><span class="v" id="armyV" style="color:var(--bone)">0</span></div>
     <div id="clock">00:00</div>
     <div id="audioCtl">
-      <button id="muteBtn" title="Mute" aria-label="Mute audio">♪</button>
+      <button id="idleBtn" class="tbtn hide" title="Cycle idle drones" aria-label="Idle drones">⛏ 0</button>
+      <button id="pauseBtn" class="tbtn" title="Pause (F)" aria-label="Pause">⏸</button>
+      <button id="restartBtn" class="tbtn" title="Restart" aria-label="Restart">⟲</button>
+      <button id="muteBtn" class="tbtn" title="Mute" aria-label="Mute audio">♪</button>
       <input id="volSlider" type="range" min="0" max="100" value="50" aria-label="Volume">
     </div>
   </div>
+
+  <div id="pauseBanner" class="hide"><span>PAUSED</span></div>
 
   <div id="toasts"></div>
 
@@ -201,6 +223,13 @@ h1 em{font-style:normal;color:var(--glow)}
         <div><kbd>P O U</kbd> Research</div>
         <div><kbd>D L G · R M Y</kbd> Train (bld selected)</div>
         <div><kbd>F</kbd> Pause</div>
+        <div><kbd>`</kbd> Select army</div>
+        <div><kbd>Shift·RClick</kbd> Queue waypoint</div>
+      </div>
+      <div id="diffRow" role="radiogroup" aria-label="Difficulty">
+        <button class="diff" data-d="easy">Calm Vent</button>
+        <button class="diff sel" data-d="normal">Standard</button>
+        <button class="diff" data-d="hard">Black Smoker</button>
       </div>
       <button class="btn" id="startBtn">Take command</button>
     </div>
@@ -251,6 +280,15 @@ const DEFS={
              trains:["ripper","mortar","medic"], upgrades:true, letter:"K"}
 };
 const BUILDABLE=[["habitat","V"],["foundry","B"],["turret","N"],["deepworks","K"]];
+
+// Difficulty shapes the opponent's wave engine, nothing about the player.
+// aiOre is a flat trickle per AI tick (0.6s) — hard cheats a little, honestly.
+const DIFFS={
+  easy:  {wave0:4, waveInc:2, waveCap:12, first:125, aiOre:0},
+  normal:{wave0:6, waveInc:3, waveCap:20, first:95,  aiOre:0},
+  hard:  {wave0:8, waveInc:4, waveCap:26, first:70,  aiOre:2}
+};
+let difficulty="normal";
 
 // Upgrades researched at the Deepworks. Each applies globally to that team.
 const UPGRADES={
@@ -424,7 +462,10 @@ function newGame(){
     cam:{x:0,y:0}, sel:[], groups:{}, armed:null,
     blocked:new Uint8Array(MAP_W*MAP_H),
     fog:new Uint8Array(MAP_W*MAP_H),       // 0 unseen · 1 explored · 2 visible
-    fogTimer:0, aiTimer:0, wave:0, waveSize:6, firstPush:95, alertCd:0,
+    fogTimer:0, aiTimer:0, wave:0,
+    waveSize:DIFFS[difficulty].wave0, waveInc:DIFFS[difficulty].waveInc,
+    waveCap:DIFFS[difficulty].waveCap, firstPush:DIFFS[difficulty].first,
+    aiOre:DIFFS[difficulty].aiOre, paused:false, alertCd:0,
     up:{0:{},1:{}}, research:{0:null,1:null},
     stats:{mined:0,built:0,killed:0,lost:0},
     deadN:0,
@@ -498,7 +539,7 @@ function spawnUnit(type,team,x,y){
   const mh=uHp(team,d);
   const e={id:G.nextId++,kind:"unit",type,team,x,y,vx:0,vy:0,hp:mh,maxHp:mh,r:d.r,
     state:"idle",tx:0,ty:0,tgt:null,node:null,site:null,cd:rnd()*.5,carry:0,face:0,
-    acqCd:0,agro:false,dead:false};
+    acqCd:0,agro:false,dead:false,path:[]};
   G.ents.push(e); return e;
 }
 function spawnBld(type,team,tx,ty,done){
@@ -577,9 +618,15 @@ function assignNearestNode(u,from){
 }
 function orderMove(u,x,y,agro){
   u.state="move"; u.tx=x; u.ty=y; u.tgt=null; u.node=null; u.site=null; u.agro=!!agro;
+  u.path.length=0;
 }
-function orderAttack(u,t){ u.state="attack"; u.tgt=t; u.node=null; u.site=null; u.agro=true; }
-function orderStop(u){ u.state="idle"; u.tgt=null; u.node=null; u.site=null; u.agro=false; }
+// shift-order: append a waypoint instead of replacing the current move
+function orderQueue(u,x,y,agro){
+  if(u.state==="move") u.path.push({x,y});
+  else orderMove(u,x,y,agro);
+}
+function orderAttack(u,t){ u.state="attack"; u.tgt=t; u.node=null; u.site=null; u.agro=true; u.path.length=0; }
+function orderStop(u){ u.state="idle"; u.tgt=null; u.node=null; u.site=null; u.agro=false; u.path.length=0; }
 
 function issue(x,y,shift){
   const t=pickAt(x,y);
@@ -601,15 +648,16 @@ function issue(x,y,shift){
                        else orderMove(u,x,y); });
     Audio_.order(); fx_ring(x,y,26,"#57E8CC");
   } else {
-    formation(units,x,y,false); Audio_.order(); fx_ring(x,y,26,"#57E8CC");
+    formation(units,x,y,false,shift); Audio_.order(); fx_ring(x,y,26,"#57E8CC");
   }
 }
-function formation(units,x,y,agro){
+function formation(units,x,y,agro,append){
   // spread the group so they don't all pile on one point
   const n=units.length, cols=Math.ceil(Math.sqrt(n)), sp=26;
   units.forEach((u,i)=>{
     const ox=(i%cols-(cols-1)/2)*sp, oy=((i/cols|0)-(Math.ceil(n/cols)-1)/2)*sp;
-    orderMove(u,clamp(x+ox,20,WORLD_W-20),clamp(y+oy,20,WORLD_H-20),agro);
+    const wx=clamp(x+ox,20,WORLD_W-20), wy=clamp(y+oy,20,WORLD_H-20);
+    append?orderQueue(u,wx,wy,agro):orderMove(u,wx,wy,agro);
   });
 }
 function pickAt(x,y){
@@ -637,6 +685,14 @@ function tryTrain(b,type){
   if(b.queue.length===1) b.qTime=d.train;
   if(team===PLAYER) Audio_.click();
   return true;
+}
+function cancelQueued(b,i){
+  if(!b||b.dead||!b.queue[i]) return;
+  const t=b.queue.splice(i,1)[0];
+  G.ore[b.team]+=DEFS[t].cost;
+  if(i===0) b.qTime=b.queue.length?DEFS[b.queue[0]].train:0;
+  Audio_.click();
+  lastSig.queue="";   // force the queue strip to rebuild next HUD pass
 }
 function tryResearch(b,key){
   const team=b.team, u=UPGRADES[key];
@@ -777,7 +833,10 @@ function tickUnit(u,dt){
         if(dist(u,u.tgt)>reach){ mx=u.tgt.x; my=u.tgt.y; stopR=reach*.9; }
         else { mx=null; u.face=Math.atan2(u.tgt.y-u.y,u.tgt.x-u.x); attackTick(u,d); }
       }
-      else if(mx!==null&&Math.hypot(u.x-u.tx,u.y-u.ty)<10) u.state="idle";
+      else if(mx!==null&&Math.hypot(u.x-u.tx,u.y-u.ty)<10){
+        const wp=u.path.shift();
+        if(wp){ u.tx=wp.x; u.ty=wp.y; } else u.state="idle";
+      }
       break; }
     case "attack": {
       if(!u.tgt){ u.state="idle"; break; }
@@ -951,6 +1010,7 @@ function seenAt(x,y){
 /* --------------------------------- AI ------------------------------------ */
 function tickAI(dt){
   G.aiTimer-=dt; if(G.aiTimer>0) return; G.aiTimer=.6;
+  if(G.aiOre) G.ore[ENEMY]+=G.aiOre;
   const mine=alive(ENEMY);
   const hub=mine.find(e=>e.type==="hub"&&e.built);
   if(!hub) return;
@@ -992,7 +1052,7 @@ function tickAI(dt){
     const targets=alive(PLAYER).filter(e=>e.kind==="bld");
     const tgt=targets.length?targets.reduce((a,b)=>dist2(hub,a)<dist2(hub,b)?a:b):null;
     if(tgt){ army.forEach(u=>orderAttack(u,tgt)); G.wave++;
-             G.waveSize=Math.min(20,G.waveSize+3);
+             G.waveSize=Math.min(G.waveCap,G.waveSize+G.waveInc);
              G.firstPush=G.t+26;                       // breathing room between pushes
              toast(G.wave===1?"Contact — first enemy push inbound":"Contact — enemy push inbound",1); }
   }
@@ -1148,6 +1208,22 @@ function render(){
     ctx.lineTo(x-(p.tx-p.x)*.055,y-(p.ty-p.y)*.055); ctx.stroke(); ctx.globalAlpha=1;
   }
   drawFx();
+
+  // rally-point flag for a selected production structure
+  const rb=G.sel.length===1&&G.sel[0].kind==="bld"&&G.sel[0].rally&&
+           DEFS[G.sel[0].type].trains&&G.sel[0].team===PLAYER?G.sel[0]:null;
+  if(rb){
+    const r=rb.rally;
+    ctx.strokeStyle="#57E8CC"; ctx.globalAlpha=.55; ctx.lineWidth=1.6;
+    ctx.setLineDash([4,7]);
+    ctx.beginPath(); ctx.moveTo(rb.x,rb.y); ctx.lineTo(r.x,r.y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(r.x,r.y); ctx.lineTo(r.x,r.y-16); ctx.stroke();
+    ctx.fillStyle="#57E8CC";
+    ctx.beginPath(); ctx.moveTo(r.x,r.y-16); ctx.lineTo(r.x+10,r.y-12.5); ctx.lineTo(r.x,r.y-9);
+    ctx.closePath(); ctx.fill();
+    ctx.globalAlpha=1;
+  }
 
   // build ghost
   if(G.armed){
@@ -1416,14 +1492,28 @@ function drawSonar(dt){
   sx.strokeRect(G.cam.x/WORLD_W*S,G.cam.y/WORLD_H*S,VW/WORLD_W*S,VH/WORLD_H*S);
   sx.restore();
 }
-function sonarTo(ev){
+function sonarWorld(ev){
   const b=sonar.getBoundingClientRect();
-  const x=(ev.clientX-b.left)/b.width*WORLD_W, y=(ev.clientY-b.top)/b.height*WORLD_H;
-  G.cam.x=clamp(x-VW/2,0,Math.max(0,WORLD_W-VW));
-  G.cam.y=clamp(y-VH/2,0,Math.max(0,WORLD_H-VH));
+  return {x:(ev.clientX-b.left)/b.width*WORLD_W, y:(ev.clientY-b.top)/b.height*WORLD_H};
 }
-sonar.addEventListener("pointerdown",e=>{ sonar.setPointerCapture(e.pointerId); sonarTo(e); });
-sonar.addEventListener("pointermove",e=>{ if(e.buttons&1) sonarTo(e); });
+function sonarTo(ev){
+  const w=sonarWorld(ev);
+  G.cam.x=clamp(w.x-VW/2,0,Math.max(0,WORLD_W-VW));
+  G.cam.y=clamp(w.y-VH/2,0,Math.max(0,WORLD_H-VH));
+}
+sonar.addEventListener("contextmenu",e=>e.preventDefault());
+sonar.addEventListener("pointerdown",e=>{
+  if(G.paused) return;
+  if(e.button===2){
+    // right-click on the sonar issues a move order at that world point
+    const w=sonarWorld(e);
+    const units=G.sel.filter(u=>u.kind==="unit"&&u.team===PLAYER&&!u.dead);
+    if(units.length){ formation(units,w.x,w.y,false,e.shiftKey); Audio_.order(); }
+    return;
+  }
+  sonar.setPointerCapture(e.pointerId); sonarTo(e);
+});
+sonar.addEventListener("pointermove",e=>{ if(!G.paused&&e.buttons&1) sonarTo(e); });
 
 /* --------------------------------- HUD ----------------------------------- */
 const el=id=>document.getElementById(id);
@@ -1443,6 +1533,10 @@ function updateHUD(){
   el("armyV").textContent=alive(PLAYER).filter(e=>e.kind==="unit"&&!DEFS[e.type].worker).length;
   const m=Math.floor(G.t/60), s=Math.floor(G.t%60);
   el("clock").textContent=String(m).padStart(2,"0")+":"+String(s).padStart(2,"0");
+  const nIdle=idleWorkers().length;
+  const ib=el("idleBtn");
+  ib.classList.toggle("hide",!nIdle||!G.started||!!G.over);
+  if(nIdle) ib.textContent="⛏ "+nIdle;
 
   G.sel=G.sel.filter(e=>!e.dead);
   const sel=G.sel;
@@ -1479,8 +1573,13 @@ function updateHUD(){
       lastSig.roster=rSig;
       roster.innerHTML=sel.slice(0,24).map(e=>{
         const f=e.hp/e.maxHp;
-        return `<div class="chip${f<.5?" hurt":""}">${DEFS[e.type].letter}<i style="width:${f*100}%"></i></div>`;
+        return `<div class="chip${f<.5?" hurt":""}" title="${DEFS[e.type].name}">${DEFS[e.type].letter}<i style="width:${f*100}%"></i></div>`;
       }).join("");
+      // click a chip to drill down to that one unit
+      for(let i=0;i<roster.children.length;i++){
+        const e2=sel[i];
+        roster.children[i].onclick=()=>{ if(e2&&!e2.dead){ G.sel=[e2]; Audio_.select(); } };
+      }
     }
   }
   // queue — rebuild on change, then animate the leading bar in place
@@ -1491,9 +1590,13 @@ function updateHUD(){
     lastSig.queue=qSig;
     queue.innerHTML = showQ
       ? pb.queue.map((t,i)=>
-          `<div class="qcell${i===0?" act":""}">${DEFS[t].letter}<i style="width:0%"></i></div>`
+          `<div class="qcell${i===0?" act":""}" title="Cancel ${DEFS[t].name} (refund ${DEFS[t].cost})">${DEFS[t].letter}<i style="width:0%"></i></div>`
         ).join("")||`<span style="font-size:10px;color:var(--mute);letter-spacing:.1em">QUEUE EMPTY</span>`
       : "";
+    if(showQ) for(let i=0;i<queue.children.length;i++){
+      const n=queue.children[i];
+      if(n.classList&&n.classList.contains("qcell")) n.onclick=()=>cancelQueued(pb,i);
+    }
   }
   if(showQ&&pb.queue.length){
     const bar=queue.querySelector(".qcell.act i");
@@ -1562,8 +1665,8 @@ function armAttackMove(){ attackMove=true; G.armed=null; Audio_.click(); }
 
 view.addEventListener("contextmenu",e=>e.preventDefault());
 view.addEventListener("pointerdown",e=>{
-  Audio_.resume();
-  if(!G.started||G.over) return;
+  if(!G.paused) Audio_.resume();
+  if(!G.started||G.over||G.paused) return;
   view.setPointerCapture(e.pointerId);
   const r=view.getBoundingClientRect();
   mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top;
@@ -1633,6 +1736,13 @@ window.addEventListener("keydown",e=>{
   const k=e.key.toLowerCase();
   keys[k]=true;
   if(e.repeat) return;   // camera pan uses `keys`; every action below is one-shot
+  if(k==="f"){ setPaused(!G.paused); return; }
+  if(G.paused) return;
+  if(k==="`"){
+    G.sel=G.ents.filter(en=>!en.dead&&en.team===PLAYER&&en.kind==="unit"&&!DEFS[en.type].worker);
+    if(G.sel.length) Audio_.select();
+    return;
+  }
   if(e.ctrlKey&&/^[1-9]$/.test(e.key)){
     G.groups[e.key]=G.sel.slice(); toast("Group "+e.key+" set"); Audio_.click(); e.preventDefault(); return;
   }
@@ -1668,10 +1778,31 @@ function resetInput(){
   lastRecall.key=""; lastRecall.t=0;
 }
 window.addEventListener("blur",()=>{ resetInput(); });
+function setPaused(p){
+  if(!G.started||G.over||G.paused===p) return;
+  G.paused=p;
+  el("pauseBanner").classList.toggle("hide",!p);
+  el("pauseBtn").textContent=p?"▶":"⏸";
+  // silence everything while frozen; resume() is a no-op if we never suspended
+  if(Audio_.ready){ p?Audio_.ctx.suspend():Audio_.ctx.resume(); }
+}
 document.addEventListener("visibilitychange",()=>{
-  if(document.visibilityState==="visible") Audio_.resume();
-  else resetInput();
+  if(document.visibilityState==="visible"){ if(!G.paused) Audio_.resume(); }
+  else { resetInput(); setPaused(true); }   // auto-pause when the tab hides
 });
+el("pauseBtn").onclick=()=>setPaused(!G.paused);
+let restartArm=0;
+el("restartBtn").onclick=()=>{
+  if(!G.started) return;
+  const tN=performance.now();
+  if(tN-restartArm>3000){ restartArm=tN; toast("Click again to restart the shift",1); return; }
+  restartArm=0;
+  el("endScreen").classList.add("hide");
+  resetInput(); setPaused(false);
+  Audio_.ambient();
+  newGame(); prerenderTerrain(); G.started=true; centerOn(playerHub());
+  toast("Shift restarted");
+};
 
 function tickCamera(dt){
   const sp=760*dt;
@@ -1696,7 +1827,7 @@ let last=now(), hudAcc=0, sonAcc=0, endAcc=0;
 function frame(){
   requestAnimationFrame(frame);
   const t=now(); let dt=Math.min(.05,t-last); last=t;
-  if(G.started&&!G.over){
+  if(G.started&&!G.over&&!G.paused){
     G.t+=dt; G.alertCd-=dt; camShake=Math.max(0,camShake-dt*30);
     rehash();
     for(const e of G.ents){ if(e.dead) continue;
@@ -1749,9 +1880,14 @@ const store={
 };
 function saveSettings(){ store.write("settings",{vol:Audio_.vol,muted:Audio_.muted}); }
 function loadSettings(){
-  const s=store.read("settings",null); if(!s) return;
-  if(typeof s.vol==="number") Audio_.vol=clamp(s.vol,0,1);
-  Audio_.muted=!!s.muted;
+  const s=store.read("settings",null);
+  if(s){
+    if(typeof s.vol==="number") Audio_.vol=clamp(s.vol,0,1);
+    Audio_.muted=!!s.muted;
+  }
+  const d=store.read("difficulty","normal");
+  if(DIFFS[d]) difficulty=d;
+  document.querySelectorAll(".diff").forEach(x=>x.classList.toggle("sel",x.dataset.d===difficulty));
 }
 const volS=el("volSlider"), muteB=el("muteBtn");
 function syncAudioCtl(){
@@ -1762,6 +1898,27 @@ function syncAudioCtl(){
 volS.oninput=()=>{ Audio_.setVolume(volS.value/100); saveSettings(); };
 muteB.onclick=()=>{ Audio_.setMuted(!Audio_.muted); syncAudioCtl(); saveSettings(); };
 
+function idleWorkers(){
+  return G.ents.filter(e=>!e.dead&&e.team===PLAYER&&e.kind==="unit"&&
+                          DEFS[e.type].worker&&e.state==="idle");
+}
+let idleIx=0;
+el("idleBtn").onclick=()=>{
+  const iw=idleWorkers(); if(!iw.length) return;
+  idleIx=(idleIx+1)%iw.length;
+  const w=iw[idleIx];
+  G.sel=[w]; centerOn(w); Audio_.select();
+};
+
+document.querySelectorAll(".diff").forEach(b=>{
+  b.onclick=()=>{
+    difficulty=b.dataset.d;
+    document.querySelectorAll(".diff").forEach(x=>x.classList.toggle("sel",x===b));
+    store.write("difficulty",difficulty);
+    if(Audio_.ready) Audio_.click();
+  };
+});
+
 /* --------------------------------- boot ----------------------------------- */
 function boot(){
   loadSettings(); syncAudioCtl();
@@ -1771,6 +1928,8 @@ window.addEventListener("resize",()=>{ resize(); });
 el("startBtn").onclick=()=>{
   Audio_.init();
   el("intro").classList.add("hide");
+  // regenerate: the difficulty picked on this screen must shape the new game
+  newGame(); prerenderTerrain();
   G.started=true; centerOn(playerHub());
   toast("Put your drones on the chimneys");
 };

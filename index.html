@@ -364,6 +364,7 @@ function newGame(){
     fogTimer:0, aiTimer:0, wave:0, waveSize:6, firstPush:95, alertCd:0,
     up:{0:{},1:{}}, research:{0:null,1:null},
     stats:{mined:0,built:0,killed:0,lost:0},
+    deadN:0,
     vents:[]
   };
   buildTerrain();
@@ -448,7 +449,7 @@ function spawnBld(type,team,tx,ty,done){
   G.ents.push(e); return e;
 }
 function killEnt(e){
-  if(e.dead) return; e.dead=true;
+  if(e.dead) return; e.dead=true; G.deadN++;
   if(e.kind==="bld"){
     for(let ox=0;ox<e.w;ox++) for(let oy=0;oy<e.h;oy++)
       if(inMap(e.tx+ox,e.ty+oy)) G.blocked[bIdx(e.tx+ox,e.ty+oy)]=0;
@@ -486,17 +487,19 @@ function capOf(team){
 }
 
 /* -------------------------- spatial hash (perf) ------------------------- */
-const CELL=64, hash=new Map();
+// integer keys + pooled cell arrays: the old string keys allocated one
+// template string per entity per frame and a fresh Map besides
+const CELL=64, HASH_W=Math.ceil(WORLD_W/CELL)+2, hash=new Map();
 function rehash(){
-  hash.clear();
+  for(const a of hash.values()) a.length=0;
   for(const e of G.ents){ if(e.dead) continue;
-    const k=((e.x/CELL)|0)+","+((e.y/CELL)|0);
+    const k=((e.y/CELL)|0)*HASH_W+((e.x/CELL)|0);
     let a=hash.get(k); if(!a) hash.set(k,a=[]); a.push(e); }
 }
 function near(x,y,rad,fn){
   const c0=((x-rad)/CELL)|0, c1=((x+rad)/CELL)|0, r0=((y-rad)/CELL)|0, r1=((y+rad)/CELL)|0;
-  for(let cx=c0;cx<=c1;cx++) for(let cy=r0;cy<=r1;cy++){
-    const a=hash.get(cx+","+cy); if(!a) continue;
+  for(let cy=r0;cy<=r1;cy++) for(let cx=c0;cx<=c1;cx++){
+    const a=hash.get(cy*HASH_W+cx); if(!a) continue;
     for(const e of a) fn(e);
   }
 }
@@ -666,6 +669,7 @@ function damage(e,dmg,team){
 /* ------------------------------ unit tick -------------------------------- */
 function tickUnit(u,dt){
   const d=DEFS[u.type];
+  const eSpd=uSpd(u.team,d), eRng=uRng(u.team,d);   // hoisted: hot path
   u.cd-=dt; u.acqCd-=dt;
 
   // Tender: repair the most wounded friendly in range
@@ -705,7 +709,7 @@ function tickUnit(u,dt){
       mx=u.tx; my=u.ty; stopR=6;
       if(u.agro&&u.tgt&&!u.tgt.dead){
         // attack-move closes distance on an acquired target instead of drifting past it
-        const reach=uRng(u.team,d)+u.tgt.r*(u.tgt.kind==="bld"?.75:.6);
+        const reach=eRng+u.tgt.r*(u.tgt.kind==="bld"?.75:.6);
         if(dist(u,u.tgt)>reach){ mx=u.tgt.x; my=u.tgt.y; stopR=reach*.9; }
         else { mx=null; u.face=Math.atan2(u.tgt.y-u.y,u.tgt.x-u.x); attackTick(u,d); }
       }
@@ -713,7 +717,7 @@ function tickUnit(u,dt){
       break; }
     case "attack": {
       if(!u.tgt){ u.state="idle"; break; }
-      const reach=uRng(u.team,d)+u.tgt.r*(u.tgt.kind==="bld"?.75:.6);
+      const reach=eRng+u.tgt.r*(u.tgt.kind==="bld"?.75:.6);
       if(dist(u,u.tgt)>reach){ mx=u.tgt.x; my=u.tgt.y; stopR=reach*.9; }
       else { u.face=Math.atan2(u.tgt.y-u.y,u.tgt.x-u.x); attackTick(u,d); }
       break; }
@@ -747,14 +751,14 @@ function tickUnit(u,dt){
   }
 
   if(mx!==null){
-    steer(u,mx,my,uSpd(u.team,d),dt,stopR);
+    steer(u,mx,my,eSpd,dt,stopR);
     // if a unit that wants to move has been crawling, shove it sideways
     const sp=Math.hypot(u.vx,u.vy);
-    if(sp<uSpd(u.team,d)*.25&&Math.hypot(mx-u.x,my-u.y)>stopR+12){
+    if(sp<eSpd*.25&&Math.hypot(mx-u.x,my-u.y)>stopR+12){
       u.stuck=(u.stuck||0)+dt;
       if(u.stuck>.55){
         const a=Math.atan2(my-u.y,mx-u.x)+(u.side>=0?1.55:-1.55), kf=Math.min(2,dt*60);
-        u.vx+=Math.cos(a)*uSpd(u.team,d)*1.15*kf; u.vy+=Math.sin(a)*uSpd(u.team,d)*1.15*kf;
+        u.vx+=Math.cos(a)*eSpd*1.15*kf; u.vy+=Math.sin(a)*eSpd*1.15*kf;
         if(u.stuck>1.9){ u.stuck=0; u.side=-(u.side||1); }
       }
     } else u.stuck=0;
@@ -1292,8 +1296,15 @@ function syncFog(){
 }
 function drawFog(){
   syncFog();
+  // blit only the camera's tile window — the full-world scale-up was the
+  // single largest per-frame fill
+  const tx0=Math.max(0,(G.cam.x/TILE)|0), ty0=Math.max(0,(G.cam.y/TILE)|0);
+  const tx1=Math.min(MAP_W,Math.ceil((G.cam.x+VW)/TILE)+1);
+  const ty1=Math.min(MAP_H,Math.ceil((G.cam.y+VH)/TILE)+1);
   ctx.save(); ctx.imageSmoothingEnabled=true;
-  ctx.drawImage(fogC,0,0,WORLD_W,WORLD_H); ctx.restore();
+  ctx.drawImage(fogC,tx0,ty0,tx1-tx0,ty1-ty0,
+                tx0*TILE,ty0*TILE,(tx1-tx0)*TILE,(ty1-ty0)*TILE);
+  ctx.restore();
 }
 
 /* -------------------------------- sonar ---------------------------------- */
@@ -1450,7 +1461,7 @@ function updateHUD(){
   }
   if(unitSel){
     btns.push({label:"Attack move",key:"Q",dis:false,act:()=>{armAttackMove();}});
-    btns.push({label:"Stop",key:"E",dis:false,act:()=>{sel.forEach(e=>e.kind==="unit"&&orderStop(e));Audio_.click();}});
+    btns.push({label:"Stop",key:"E",dis:false,act:()=>{G.sel.forEach(e=>e.kind==="unit"&&orderStop(e));Audio_.click();}});
   }
   if(workerSel){
     BUILDABLE.forEach(([t,k])=>{
@@ -1461,7 +1472,9 @@ function updateHUD(){
   }
   while(btns.length<9) btns.push(null);
   const list=btns.slice(0,9);
-  const cSig=list.map(b=>b?`${b.label}/${b.key}/${b.cost||""}/${b.dis?1:0}/${b.armed?1:0}`:"-").join("|");
+  // pb.id is part of the signature: identical button layouts for two different
+  // buildings must still rebind their closures
+  const cSig=(pb?pb.id:0)+"§"+list.map(b=>b?`${b.label}/${b.key}/${b.cost||""}/${b.dis?1:0}/${b.armed?1:0}`:"-").join("|");
   if(cSig!==lastSig.cmds){
     lastSig.cmds=cSig;
     cmds.innerHTML=list.map(b=>b
@@ -1469,9 +1482,10 @@ function updateHUD(){
            <span class="key">${b.key}</span><span>${b.label}</span>
            ${b.cost?`<span class="cost">${b.cost}</span>`:""}</button>`
       : `<button class="cmd empty" disabled tabindex="-1"></button>`).join("");
+    for(let i=0;i<cmds.children.length;i++){
+      const b=list[i]; cmds.children[i].onclick=(b&&!b.dis)?b.act:null;
+    }
   }
-  // rebind every pass — the closures capture live selection
-  [...cmds.children].forEach((node,i)=>{ const b=list[i]; node.onclick=(b&&!b.dis)?b.act:null; });
 }
 
 /* ------------------------------- input ----------------------------------- */
@@ -1614,7 +1628,7 @@ function tickCamera(dt){
 }
 
 /* ------------------------------- game loop -------------------------------- */
-let last=now(), hudAcc=0;
+let last=now(), hudAcc=0, sonAcc=0, endAcc=0;
 function frame(){
   requestAnimationFrame(frame);
   const t=now(); let dt=Math.min(.05,t-last); last=t;
@@ -1625,20 +1639,26 @@ function frame(){
       if(e.kind==="unit") tickUnit(e,dt); else tickBld(e,dt); }
     tickProjs(dt); tickFx(dt); tickAI(dt);
     G.fogTimer-=dt; if(G.fogTimer<=0){ G.fogTimer=.22; refreshFog(); }
-    if(G.ents.length>400) G.ents=G.ents.filter(e=>!e.dead);
-    checkEnd();
+    if(G.deadN>50){ G.ents=G.ents.filter(e=>!e.dead); G.deadN=0; }
+    endAcc+=dt; if(endAcc>=.5){ endAcc=0; checkEnd(); }
   }
   tickCamera(dt);
-  render(); drawSonar(dt);
+  render();
+  sonAcc+=dt; if(sonAcc>=.05){ drawSonar(sonAcc); sonAcc=0; }
   hudAcc+=dt; if(hudAcc>.1){ hudAcc=0; updateHUD(); }
 }
 function checkEnd(){
-  const pB=alive(PLAYER).filter(e=>e.kind==="bld").length;
-  const eB=alive(ENEMY).filter(e=>e.kind==="bld").length;
-  const pU=alive(PLAYER).filter(e=>e.kind==="unit").length;
+  let pB=0,eB=0,pU=0,pW=0;
+  for(const e of G.ents){
+    if(e.dead) continue;
+    if(e.team===PLAYER){
+      if(e.kind==="bld") pB++;
+      else { pU++; if(DEFS[e.type].worker) pW++; }
+    } else if(e.kind==="bld") eB++;
+  }
   if(eB===0) return endGame(true);
   if(pB===0&&pU===0) return endGame(false);
-  if(pB===0&&!alive(PLAYER).some(e=>DEFS[e.type].worker)) return endGame(false);
+  if(pB===0&&pW===0) return endGame(false);
 }
 function endGame(win){
   G.over=win?"win":"lose";

@@ -9,6 +9,11 @@ Network is needed at **build time only** — the rendered pack ships with your
 project and plays offline. This is the generator behind VENTFALL's
 fully-voiced campaign (139 lines, seven actors).
 
+> **Canonical repo:** [github.com/Protonmatter/voforge](https://github.com/Protonmatter/voforge).
+> This directory is a vendored copy kept in the VENTFALL repo so the voice
+> pack can be regenerated in place; upstream fixes land in the standalone repo
+> first.
+
 ```bash
 pip install ./tools/voforge          # or: pip install git+https://github.com/Protonmatter/ventfall#subdirectory=tools/voforge
 voforge --lines lines.json --cast cast.json --out vo/
